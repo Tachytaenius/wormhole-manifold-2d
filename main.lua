@@ -19,6 +19,10 @@ local stepCount
 
 local overviewMode
 
+local function sign(x)
+	return x < 0 and -1 or x == 0 and 0 or 1
+end
+
 local function asinh(x)
 	return math.log(x + math.sqrt(x ^ 2 + 1))
 end
@@ -121,6 +125,26 @@ local function getChristoffelSymbols(r, theta) -- Second kind
 		christoffelThetaThetaR
 end
 
+local function normaliseOrZero2(v) -- 2 for vec2
+	local magnitude = #v
+	if magnitude == 0 then
+		return vec2()
+	end
+	return v / magnitude
+end
+
+local function moveVectorToTarget2(current, target, rate, dt) -- 2 for vec2
+	local currentToTarget = target - current
+	local direction = normaliseOrZero2(currentToTarget)
+	local distance = #currentToTarget
+	local newCurrentToTarget = direction * math.max(0, distance - rate * dt)
+	return target - newCurrentToTarget
+end
+
+local function handleVelocity(current, target, dt, acceleration, maxSpeed)
+	return moveVectorToTarget2(current, target, acceleration, dt)
+end
+
 function love.load()
 	rayShader = love.graphics.newComputeShader("shaders/ray.glsl")
 	sceneShader = love.graphics.newShader("shaders/scene.glsl")
@@ -137,14 +161,16 @@ function love.load()
 		position = vec2(0, 0), -- r and theta
 		forward = vec2(1, 0), -- Change in r and theta, should be length 1 when converted to embed space
 		velocity = vec2(0, 0), -- Change in r and theta over time
-		maxSpeed = 200,
-		acceleration = 150,
-		angularSpeed = 2
+		angularVelocity = 0,
+		maxSpeed = 250,
+		acceleration = 750,
+		maxAngularSpeed = 2,
+		angularAcceleration = 10
 	}
 	wormhole = {
 		mouthAPosition = vec2(300, 200),
 		mouthBPosition = vec2(300, 600),
-		throatRadius = 50
+		throatRadius = 100
 	}
 	overviewMode = false
 	time = 0
@@ -171,11 +197,11 @@ function love.update(dt)
 	if love.keyboard.isDown("d") then
 		translation.x = translation.x + 1
 	end
-	local relativeAcceleration
+	local targetVelocity
 	if #translation == 0 then
-		relativeAcceleration = vec2()
+		targetVelocity = vec2()
 	else
-		relativeAcceleration = vec2.normalise(translation) * camera.acceleration
+		targetVelocity = vec2.normalise(translation) * camera.maxSpeed
 	end
 
 	-- Get relative rotation
@@ -186,8 +212,11 @@ function love.update(dt)
 	if love.keyboard.isDown(".") then
 		rotation = rotation + 1
 	end
-	local angularVelocity = rotation * camera.angularSpeed
-	local angularDisplacment = angularVelocity * dt
+	local targetAngularVelocity = rotation * camera.maxAngularSpeed
+	local angleDifference = targetAngularVelocity - camera.angularVelocity
+	local newAngleDistance = math.max(0, math.abs(angleDifference) - camera.angularAcceleration * dt)
+	camera.angularVelocity = targetAngularVelocity - sign(angleDifference) * newAngleDistance
+	local angularDisplacment = camera.angularVelocity * dt
 
 	-- Get where we are
 	local r, theta = vec2.components(camera.position)
@@ -195,7 +224,7 @@ function love.update(dt)
 	-- Get r and theta bases as well as normal vector of surface in embed space
 	local rBasis = getRBasisEmbed(r, theta)
 	local thetaBasis = getThetaBasisEmbed(r, theta)
-	local normal = vec3.normalise(vec3.cross(rBasis, thetaBasis)) -- TODO: What if the vectors being crossed are parallel (or imprecision causes so)?
+	local normal = vec3.normalise(vec3.cross(rBasis, thetaBasis))
 
 	-- Rotate if needed. Avoid unnecessary back-and-forth conversion that may cause numeric drift when not rotating
 	if angularDisplacment ~= 0 then
@@ -208,16 +237,19 @@ function love.update(dt)
 		camera.forward = forwardIntrinsic
 	end
 
+	-- Accelerate
 	local forwardEmbed = intrinsicToEmbedTangent(rBasis, thetaBasis, camera.forward)
-
-	-- Accelerate if needed
-	if #relativeAcceleration > 0 then
-		local rightEmbed = vec3.cross(normal, forwardEmbed)
-		local accelerationEmbed = intrinsicToEmbedTangent(rightEmbed, forwardEmbed, relativeAcceleration) -- Not r and theta this time. Since y is forwards, we swapped forwardEmbed and rightEmbed
-		camera.velocity = camera.velocity + embedToIntrinsicTangent(rBasis, thetaBasis, accelerationEmbed * dt)
+	local rightEmbed = vec3.cross(normal, forwardEmbed)
+	local velocityEmbed = intrinsicToEmbedTangent(rBasis, thetaBasis, camera.velocity) -- Not r and theta this time. Since y is forwards, we swapped forwardEmbed and rightEmbed
+	local relativeVelocity = embedToIntrinsicTangent(rightEmbed, forwardEmbed, velocityEmbed) -- Same space as targetVelocity
+	local newRelativeVelocity = handleVelocity(relativeVelocity, targetVelocity, dt, camera.acceleration, camera.maxSpeed)
+	if relativeVelocity ~= newRelativeVelocity then -- To avoid unnecessary conversions which may cause numeric drift
+		local newVelocityEmbed = intrinsicToEmbedTangent(rightEmbed, forwardEmbed, newRelativeVelocity)
+		local newVelocity = embedToIntrinsicTangent(rBasis, thetaBasis, newVelocityEmbed)
+		camera.velocity = newVelocity
 	end
 
-	if #camera.velocity > 0 then -- Not sure length of r and theta vectors have much meaning besides checking whether you're moving or not moving.
+	if #camera.velocity > 0 then -- Not sure length of r and theta vectors have much meaning besides checking whether they're a zero vecotr
 		-- Get displacement in embed space
 		local displacementEmbed = intrinsicToEmbedTangent(rBasis, thetaBasis, camera.velocity * dt)
 
@@ -238,14 +270,6 @@ function love.update(dt)
 				christoffelThetaThetaR * thetaDisplacement * dR
 			)
 			return vec2(newDR, newDTheta)
-		end
-
-		local function parallelTransportEmbedTangent(v)
-			-- TODO: Maybe parallel transport component coming off the surface, too? embedToIntrinsicTangent destroys it
-			-- TODO: Maintain length explicitly (probably sacrificing direction accuracy)
-			local intrinsic = embedToIntrinsicTangent(rBasis, thetaBasis, v)
-			local movedIntrinsic = parallelTransportRTheta(vec3.components(intrinsic))
-			return intrinsicToEmbedTangent(newRBasis, newThetaBasis, movedIntrinsic) -- Note that we are using the new bases on this line
 		end
 
 		camera.position = vec2(newR, newTheta % consts.tau)

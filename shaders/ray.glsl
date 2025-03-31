@@ -121,7 +121,7 @@ void computemain() {
 	float initialTheta = cameraPosition.y;
 	vec3 initialRBasis = getRBasisEmbed(initialR, initialTheta);
 	vec3 initialThetaBasis = getThetaBasisEmbed(initialR, initialTheta);
-	vec3 initialNormal = normalize(cross(initialRBasis, initialThetaBasis)); // Same TODO as the Lua side
+	vec3 initialNormal = normalize(cross(initialRBasis, initialThetaBasis));
 	float rotateAngle = float(rayMapX) / float(rayMapSize.x) * tau + tau / 4.0;
 	vec3 forwardDirectionEmbed = intrinsicToEmbedTangent(initialRBasis, initialThetaBasis, cameraForward);
 	vec3 currentDirectionEmbed = rotate(forwardDirectionEmbed, initialNormal, rotateAngle);
@@ -135,7 +135,7 @@ void computemain() {
 			vec4(colourHere, 1.0)
 		);
 
-		// Move (direction is parallel transported) (TODO: What happens if we don't use the Christoffel symbols?)
+		// Move (direction is parallel transported)
 		float r = currentPosition.x;
 		float theta = currentPosition.y;
 		vec3 rBasis = getRBasisEmbed(r, theta);
