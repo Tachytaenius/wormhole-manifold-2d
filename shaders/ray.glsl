@@ -1,6 +1,17 @@
-const float tau = 6.28318530718;
+#line 1
+// Requires include/shape.glsl
+
+// const float tau = 6.28318530718; // No redefinition
 
 uniform layout(rgba8) image2D rayMap;
+uniform layout (rgba8) image2D overlay;
+uniform bool drawToOverlay;
+uniform bool drawOverlayToRay;
+uniform int overlayAngleLines;
+uniform int overlayDistanceLineSteps;
+uniform int maxOverlayDistanceLines;
+uniform int maxAngleLineLength;
+uniform ivec2 overlaySize;
 
 uniform int stepCount;
 uniform float stepSize;
@@ -19,33 +30,6 @@ uniform vec2 wormholeMouthBPosition;
 uniform bool initialModeCurved;
 uniform float curvedToFlatR;
 uniform float flatToCurvedRho;
-
-vec3 rThetaToEmbedPosition(float r, float theta) {
-	return vec3(
-		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * cos(theta),
-		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * sin(theta),
-		wormholeThroatRadius * asinh(r / wormholeThroatRadius)
-	);
-}
-
-vec2 rThetaToRealPosition(float r, float theta) {
-	vec2 catenoid = vec2(
-		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * cos(theta),
-		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * sin(theta)
-	);
-
-	if (r >= 0.0) {
-		return wormholeMouthAPosition + catenoid;
-	} else {
-		vec2 delta = wormholeMouthBPosition - wormholeMouthAPosition;
-		vec2 direction = normalize(delta);
-		vec2 parallel = direction * dot(catenoid, direction);
-		vec2 perpendicular = catenoid - parallel;
-		vec2 parallelFlipped = -parallel;
-		vec2 catenoidFlipped = parallelFlipped + perpendicular;
-		return wormholeMouthBPosition + catenoidFlipped;
-	}
-}
 
 vec3 getRBasisEmbed(float r, float theta) {
 	float rDelta = 0.1;
@@ -88,36 +72,6 @@ vec3 embedToRealTangent(vec3 v, bool negative) {
 	vec3 perpendicular = v - parallel;
 	vec3 parallelFlipped = -parallel;
 	return parallelFlipped + perpendicular;
-}
-
-struct ChristoffelSymbols {
-	float rThetaTheta;
-	float thetaRTheta;
-	float thetaThetaR;
-};
-
-ChristoffelSymbols getChristoffelSymbols(float r, float theta) {
-	return ChristoffelSymbols (
-		-r,
-		r / (wormholeThroatRadius * wormholeThroatRadius + r * r),
-		r / (wormholeThroatRadius * wormholeThroatRadius + r * r)
-	);
-}
-
-vec3 sampleBackground(vec2 position) {
-	vec2 rg = position.xy / (gridSpacing * gridCells);
-	// vec2 rg = vec2(1.0, 0.0);
-	// if (
-	// 	distance(position, wormholeMouthAPosition) >
-	// 	distance(position, wormholeMouthBPosition)
-	// ) {
-	// 	rg.rg = rg.gr;
-	// }
-	vec2 cellPos = mod(position.xy, vec2(gridSpacing));
-	if (min(cellPos.x, cellPos.y) < gridLineThickness) {
-		return vec3(rg, 1.0);
-	}
-	return vec3(rg, 0.0);
 }
 
 vec2 rotate(vec2 v, float a) {
@@ -175,8 +129,29 @@ void computemain() {
 			currentRealPosition = currentPosition;
 		}
 
-		// Sample and store
-		colourHere = sampleBackground(currentRealPosition);
+		bool overlayPixel = stepNumber % overlayDistanceLineSteps == 0 && stepNumber / overlayDistanceLineSteps < maxOverlayDistanceLines;
+		int maxLen = maxOverlayDistanceLines * overlayDistanceLineSteps;
+		float proportion = float(rayMapX) / float(rayMapSize.x);
+		if (0.7 < proportion && proportion < 0.8) {
+			maxLen *= 2;
+		}
+		overlayPixel = overlayPixel || (mod(float(rayMapX) / float(rayMapSize.x), 0.125) < 0.125 * 0.0625 && stepNumber < maxLen);
+
+		if (drawToOverlay) {
+			// Write to overlay
+			if (overlayPixel) {
+				imageStore(
+					overlay,
+					ivec2(currentPosition / tau * vec2(overlaySize)),
+					vec4(1.0)
+				);
+			}
+		}
+
+		colourHere = sampleBackground(currentPosition.x, currentPosition.y, currentRealPosition);
+		if (drawOverlayToRay && overlayPixel) {
+			colourHere = vec3(1.0);
+		};
 		imageStore(
 			rayMap,
 			ivec2(rayMapX, stepNumber),
@@ -197,29 +172,43 @@ void computemain() {
 			float stepR = stepIntrinsic.x;
 			float stepTheta = stepIntrinsic.y;
 			ChristoffelSymbols christoffelSymbols = getChristoffelSymbols(r, theta);
-			float newStepR = stepR - christoffelSymbols.rThetaTheta * stepTheta * stepTheta;
-			float newStepTheta = stepTheta - 2.0 * christoffelSymbols.thetaRTheta * stepR * stepTheta; // thetaRTheta is thetaThetaR, and we are moving our displacement vector so the two Christoffel symbol terms are the same, hence double
+
+			// float newStepR = stepR - christoffelSymbols.rThetaTheta * stepTheta * stepTheta;
+			// float newStepTheta = stepTheta - 2.0 * christoffelSymbols.thetaRTheta * stepR * stepTheta; // thetaRTheta is thetaThetaR, and we are moving our displacement vector so the two Christoffel symbol terms are the same, hence double
+
+			// local newDR = dR - (
+			// 	christoffelRRTheta * rDisplacement * dTheta +
+			// 	christoffelRThetaR * thetaDisplacement * dR
+			// );
+			// local newDTheta = dTheta - christoffelThetaRR * rDisplacement * dR;
+
+			float newStepR = stepR - (
+				christoffelSymbols.rRTheta * stepR * stepTheta +
+				christoffelSymbols.rThetaR * stepTheta * stepR
+			);
+			float newStepTheta = stepTheta - christoffelSymbols.thetaRR * stepR * stepR;
+
 			vec2 newStep = vec2(newStepR, newStepTheta);
 			vec3 newRBasis = getRBasisEmbed(newR, newTheta);
 			vec3 newThetaBasis = getThetaBasisEmbed(newR, newTheta);
 			currentDirectionEmbed = normalize(intrinsicToEmbedTangent(newRBasis, newThetaBasis, newStep));
-			currentPosition = newPosition;
+			currentPosition = mod(newPosition, tau);
 		} else {
 			// Move (we're in flat space)
 			currentPosition += currentDirectionFlat * stepSize;
 		}
 
 		// Check for leaving current wormhole region
-		if (currentModeCurved) {
-			float r = currentPosition.x;
-			if (abs(r) > curvedToFlatR) {
-				float theta = currentPosition.y;
+		// if (currentModeCurved) {
+		// 	float r = currentPosition.x;
+		// 	if (abs(r) > curvedToFlatR) {
+		// 		float theta = currentPosition.y;
 
-				currentDirectionFlat = normalize(embedToRealTangent(currentDirectionEmbed, r < 0.0).xy);
-				currentPosition = rThetaToRealPosition(r, theta);
-				currentModeCurved = false;
-			}
-		}
+		// 		currentDirectionFlat = normalize(embedToRealTangent(currentDirectionEmbed, r < 0.0).xy);
+		// 		currentPosition = rThetaToRealPosition(r, theta);
+		// 		currentModeCurved = false;
+		// 	}
+		// }
 
 		// Check for entering a wormhole region
 		if (!currentModeCurved) {
