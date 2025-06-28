@@ -264,12 +264,9 @@ function love.update(dt)
 			camera.velocity = newVelocity
 		end
 
-		if #camera.velocity > 0 then -- Not sure length of r and theta vectors have much meaning besides checking whether they're a zero vecotr
-			-- Get displacement in embed space
-			local displacementEmbed = intrinsicToEmbedTangent(rBasis, thetaBasis, camera.velocity * dt)
-
-			-- Get r and theta movement from displacement
-			local rDisplacement, thetaDisplacement = vec2.components(embedToIntrinsicTangent(rBasis, thetaBasis, displacementEmbed))
+		if #camera.velocity > 0 then -- Not sure length of r and theta vectors have much meaning besides checking whether they're a zero vector
+			-- Get r and theta movement
+			local rDisplacement, thetaDisplacement = camera.velocity.x * dt, camera.velocity.y * dt
 			local newR = r + rDisplacement
 			local newTheta = theta + thetaDisplacement
 
