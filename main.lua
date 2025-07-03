@@ -1,6 +1,6 @@
--- TODO: Rename embed space to ambient space
 -- TODO: Visualise embedding in ambient space
 -- TODO: More varied background? So that it is easier to see just how warped your view becomes
+-- TODO: Match geodesics on Wikipedia page for Ellis wormhole. What am I missing?? Lightlike/timelike/spacelike geodesics...?
 
 local mathsies = require("lib.mathsies")
 local vec2 = mathsies.vec2
@@ -46,7 +46,7 @@ local function asinh(x)
 	return math.log(x + math.sqrt(x ^ 2 + 1))
 end
 
-local function rThetaToEmbedPosition(r, theta)
+local function rThetaToExtrinsicPosition(r, theta)
 	return vec3( -- Ellis wormhole (catenoid)
 		wormhole.throatRadius * math.sqrt(r ^ 2 / wormhole.throatRadius ^ 2 + 1) * math.cos(theta),
 		wormhole.throatRadius * math.sqrt(r ^ 2 / wormhole.throatRadius ^ 2 + 1) * math.sin(theta),
@@ -86,9 +86,9 @@ local function rThetaToRealPosition(r, theta)
 	end
 end
 
-local function getRBasisEmbed(r, theta)
+local function getRBasisExtrinsic(r, theta)
 	-- local rDelta = 0.0001
-	-- return (rThetaToEmbedPosition(r + rDelta, theta) - rThetaToEmbedPosition(r, theta)) / rDelta
+	-- return (rThetaToExtrinsicPosition(r + rDelta, theta) - rThetaToExtrinsicPosition(r, theta)) / rDelta
 	return vec3(
 		sign(wormhole.throatRadius) * r * math.cos(theta) / math.sqrt(r * r + wormhole.throatRadius * wormhole.throatRadius),
 		sign(wormhole.throatRadius) * r * math.sin(theta) / math.sqrt(r * r + wormhole.throatRadius * wormhole.throatRadius),
@@ -96,9 +96,9 @@ local function getRBasisEmbed(r, theta)
 	)
 end
 
-local function getThetaBasisEmbed(r, theta)
+local function getThetaBasisExtrinsic(r, theta)
 	-- local thetaDelta = 0.0001 -- :3
-	-- return (rThetaToEmbedPosition(r, theta + thetaDelta) - rThetaToEmbedPosition(r, theta)) / thetaDelta
+	-- return (rThetaToExtrinsicPosition(r, theta + thetaDelta) - rThetaToExtrinsicPosition(r, theta)) / thetaDelta
 	return vec3(
 		-wormhole.throatRadius * math.sqrt(r * r / (wormhole.throatRadius * wormhole.throatRadius) + 1) * math.sin(theta),
 		wormhole.throatRadius * math.sqrt(r * r / (wormhole.throatRadius * wormhole.throatRadius) + 1) * math.cos(theta),
@@ -107,12 +107,12 @@ local function getThetaBasisEmbed(r, theta)
 end
 
 -- Not necessarily r and theta input
-local function intrinsicToEmbedTangent(e1, e2, v)
+local function intrinsicToExtrinsicTangent(e1, e2, v)
 	return v.x * e1 + v.y * e2
 end
 
 -- Not necessarily r and theta output
-local function embedToIntrinsicTangent(e1, e2, v)
+local function extrinsicToIntrinsicTangent(e1, e2, v)
 	-- Simplified from a 4D->3D version from somebody else's work
 	local uu = vec3.dot(e1, e1)
 	local uv = vec3.dot(e1, e2)
@@ -127,7 +127,7 @@ local function embedToIntrinsicTangent(e1, e2, v)
 	)
 end
 
-local function embedToRealTangent(v, negative)
+local function extrinsicToRealTangent(v, negative)
 	if negative then
 		local delta = wormhole.mouthBPosition - wormhole.mouthAPosition
 		local delta3D = vec3(delta.x, delta.y, 0)
@@ -196,7 +196,7 @@ function love.load()
 	camera = {
 		mode = "curved", -- "curved" or "flat"
 		position = vec2(0, 0), -- r and theta
-		forward = vec2(1, 0), -- Change in r and theta, should be length 1 when converted to embed space
+		forward = vec2(1, 0), -- Change in r and theta, should be length 1 when converted to extrinsic space
 		velocity = vec2(0, 0), -- Change in r and theta over time
 		angularVelocity = 0,
 		maxSpeed = 250,
@@ -283,31 +283,31 @@ function love.update(dt)
 		-- Get where we are
 		local r, theta = vec2.components(camera.position)
 
-		-- Get r and theta bases as well as normal vector of surface in embed space
-		local rBasis = getRBasisEmbed(r, theta)
-		local thetaBasis = getThetaBasisEmbed(r, theta)
+		-- Get r and theta bases as well as normal vector of surface in extrinsic space
+		local rBasis = getRBasisExtrinsic(r, theta)
+		local thetaBasis = getThetaBasisExtrinsic(r, theta)
 		local normal = vec3.normalise(vec3.cross(rBasis, thetaBasis))
 
 		-- Rotate if needed. Avoid unnecessary back-and-forth conversion that may cause numeric drift when not rotating
 		if angularDisplacment ~= 0 then
-			local forwardEmbed = intrinsicToEmbedTangent(rBasis, thetaBasis, camera.forward)
+			local forwardExtrinsic = intrinsicToExtrinsicTangent(rBasis, thetaBasis, camera.forward)
 			local axisAngle = normal * angularDisplacment
 			local quaternion = quat.fromAxisAngle(axisAngle)
-			local rotated = vec3.rotate(forwardEmbed, quaternion)
+			local rotated = vec3.rotate(forwardExtrinsic, quaternion)
 			local normalised = vec3.normalise(rotated) -- Avoid numeric drift of magnitude
-			local forwardIntrinsic = embedToIntrinsicTangent(rBasis, thetaBasis, normalised)
+			local forwardIntrinsic = extrinsicToIntrinsicTangent(rBasis, thetaBasis, normalised)
 			camera.forward = forwardIntrinsic
 		end
 
 		-- Accelerate
-		local forwardEmbed = intrinsicToEmbedTangent(rBasis, thetaBasis, camera.forward)
-		local rightEmbed = vec3.cross(normal, forwardEmbed) -- No normalisation required
-		local velocityEmbed = intrinsicToEmbedTangent(rBasis, thetaBasis, camera.velocity)
-		local relativeVelocity = embedToIntrinsicTangent(rightEmbed, -forwardEmbed, velocityEmbed) -- Same space as targetVelocity. Not r and theta this time. Since y is forwards, we swapped forwardEmbed and rightEmbed and negated forwardEmbed
+		local forwardExtrinsic = intrinsicToExtrinsicTangent(rBasis, thetaBasis, camera.forward)
+		local rightExtrinsic = vec3.cross(normal, forwardExtrinsic) -- No normalisation required
+		local velocityExtrinsic = intrinsicToExtrinsicTangent(rBasis, thetaBasis, camera.velocity)
+		local relativeVelocity = extrinsicToIntrinsicTangent(rightExtrinsic, -forwardExtrinsic, velocityExtrinsic) -- Same space as targetVelocity. Not r and theta this time. Since y is forwards, we swapped forwardExtrinsic and rightExtrinsic and negated forwardExtrinsic
 		local newRelativeVelocity = handleVelocity(relativeVelocity, targetVelocity, dt, camera.acceleration, camera.maxSpeed)
 		if relativeVelocity ~= newRelativeVelocity then -- To avoid unnecessary conversions which may cause numeric drift
-			local newVelocityEmbed = intrinsicToEmbedTangent(rightEmbed, -forwardEmbed, newRelativeVelocity)
-			local newVelocity = embedToIntrinsicTangent(rBasis, thetaBasis, newVelocityEmbed)
+			local newVelocityExtrinsic = intrinsicToExtrinsicTangent(rightExtrinsic, -forwardExtrinsic, newRelativeVelocity)
+			local newVelocity = extrinsicToIntrinsicTangent(rBasis, thetaBasis, newVelocityExtrinsic)
 			camera.velocity = newVelocity
 		end
 
@@ -369,7 +369,7 @@ function love.update(dt)
 
 			-- camera.position = vec2(newR, newTheta % consts.tau)
 			-- camera.velocity = parallelTransportRTheta(vec2.components(camera.velocity))
-			-- local forwardNormalisedIntrinsic = embedToIntrinsicTangent(rBasis, thetaBasis, vec3.normalise(forwardEmbed)) -- Normalised to prevent numeric drift
+			-- local forwardNormalisedIntrinsic = extrinsicToIntrinsicTangent(rBasis, thetaBasis, vec3.normalise(forwardExtrinsic)) -- Normalised to prevent numeric drift
 			-- camera.forward = parallelTransportRTheta(vec2.components(forwardNormalisedIntrinsic))
 		end
 	elseif camera.mode == "flat" then
@@ -386,11 +386,11 @@ function love.update(dt)
 		local cuttoffRho = getWormholeCutoffRho(true)
 		if rho > cuttoffRho then
 			local theta = camera.position.y
-			local rBasis = getRBasisEmbed(r, theta)
-			local thetaBasis = getThetaBasisEmbed(r, theta)
+			local rBasis = getRBasisExtrinsic(r, theta)
+			local thetaBasis = getThetaBasisExtrinsic(r, theta)
 
-			local orientationReal = embedToRealTangent(
-				intrinsicToEmbedTangent(rBasis, thetaBasis, camera.forward),
+			local orientationReal = extrinsicToRealTangent(
+				intrinsicToExtrinsicTangent(rBasis, thetaBasis, camera.forward),
 				r < 0
 			)
 			local orientationFlat = vec2(orientationReal.x, orientationReal.y) -- Should not end up as a zero vector this far out
@@ -398,8 +398,8 @@ function love.update(dt)
 
 			camera.position = rThetaToRealPosition(r, theta)
 
-			local velocityReal = embedToRealTangent(
-				intrinsicToEmbedTangent(rBasis, thetaBasis, camera.velocity),
+			local velocityReal = extrinsicToRealTangent(
+				intrinsicToExtrinsicTangent(rBasis, thetaBasis, camera.velocity),
 				r < 0
 			)
 			camera.velocity = vec2(velocityReal.x, velocityReal.y)
@@ -442,21 +442,21 @@ function love.update(dt)
 
 			local theta = vec2.toAngle(delta)
 			local r = math.sqrt(rho ^ 2 - wormhole.throatRadius ^ 2) * rSign
-			local rBasis = getRBasisEmbed(r, theta)
-			local thetaBasis = getThetaBasisEmbed(r, theta)
+			local rBasis = getRBasisExtrinsic(r, theta)
+			local thetaBasis = getThetaBasisExtrinsic(r, theta)
 
 			camera.position = vec2(r, theta)
 
 			forwardsFlat = vec3(forwardsFlat.x, forwardsFlat.y, 0)
-			local intrinsicPreNormalise = embedToIntrinsicTangent(rBasis, thetaBasis, forwardsFlat)
-			local embedNormalised = vec3.normalise(intrinsicToEmbedTangent(rBasis, thetaBasis, intrinsicPreNormalise))
-			camera.forward = embedToIntrinsicTangent(rBasis, thetaBasis, embedNormalised)
+			local intrinsicPreNormalise = extrinsicToIntrinsicTangent(rBasis, thetaBasis, forwardsFlat)
+			local extrinsicNormalised = vec3.normalise(intrinsicToExtrinsicTangent(rBasis, thetaBasis, intrinsicPreNormalise))
+			camera.forward = extrinsicToIntrinsicTangent(rBasis, thetaBasis, extrinsicNormalised)
 
 			local speed = #velocity
 			local velocityZ0 = vec3(velocity.x, velocity.y, 0)
-			local intrinsicPreLength = embedToIntrinsicTangent(rBasis, thetaBasis, velocityZ0)
-			local embedLengthCorrected = speed * normaliseOrZero3(intrinsicToEmbedTangent(rBasis, thetaBasis, intrinsicPreLength))
-			camera.velocity = embedToIntrinsicTangent(rBasis, thetaBasis, embedLengthCorrected)
+			local intrinsicPreLength = extrinsicToIntrinsicTangent(rBasis, thetaBasis, velocityZ0)
+			local extrinsicLengthCorrected = speed * normaliseOrZero3(intrinsicToExtrinsicTangent(rBasis, thetaBasis, intrinsicPreLength))
+			camera.velocity = extrinsicToIntrinsicTangent(rBasis, thetaBasis, extrinsicLengthCorrected)
 
 			camera.angle = nil
 			camera.mode = "curved"
@@ -477,15 +477,15 @@ function love.draw()
 			love.graphics.translate(-cameraPositionReal.x, -cameraPositionReal.y)
 			love.graphics.points(cameraPositionReal.x, cameraPositionReal.y)
 			local r, theta = vec2.components(camera.position)
-			local orientationEmbed = embedToRealTangent(
-				intrinsicToEmbedTangent(
-					getRBasisEmbed(r, theta),
-					getThetaBasisEmbed(r, theta),
+			local orientationExtrinsic = extrinsicToRealTangent(
+				intrinsicToExtrinsicTangent(
+					getRBasisExtrinsic(r, theta),
+					getThetaBasisExtrinsic(r, theta),
 					camera.forward
 				),
 				r < 0
 			)
-			local orientationFlat = vec2(orientationEmbed.x, orientationEmbed.y)
+			local orientationFlat = vec2(orientationExtrinsic.x, orientationExtrinsic.y)
 			if #orientationFlat > 0 then -- Prevent visual glitches
 				local added = cameraPositionReal + orientationFlat * orientationLineLength
 				love.graphics.line(

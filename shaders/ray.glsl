@@ -20,7 +20,7 @@ uniform bool initialModeCurved;
 uniform float curvedToFlatR;
 uniform float flatToCurvedRho;
 
-vec3 rThetaToEmbedPosition(float r, float theta) {
+vec3 rThetaToExtrinsicPosition(float r, float theta) {
 	return vec3(
 		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * cos(theta),
 		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * sin(theta),
@@ -47,9 +47,9 @@ vec2 rThetaToRealPosition(float r, float theta) {
 	}
 }
 
-vec3 getRBasisEmbed(float r, float theta) {
+vec3 getRBasisExtrinsic(float r, float theta) {
 	// float rDelta = 0.01;
-	// return (rThetaToEmbedPosition(r + rDelta, theta) - rThetaToEmbedPosition(r, theta)) / rDelta;
+	// return (rThetaToExtrinsicPosition(r + rDelta, theta) - rThetaToExtrinsicPosition(r, theta)) / rDelta;
 	return vec3(
 		sign(wormholeThroatRadius) * r * cos(theta) / sqrt(r * r + wormholeThroatRadius * wormholeThroatRadius),
 		sign(wormholeThroatRadius) * r * sin(theta) / sqrt(r * r + wormholeThroatRadius * wormholeThroatRadius),
@@ -57,9 +57,9 @@ vec3 getRBasisEmbed(float r, float theta) {
 	);
 }
 
-vec3 getThetaBasisEmbed(float r, float theta) {
+vec3 getThetaBasisExtrinsic(float r, float theta) {
 	// float thetaDelta = 0.01; // :3
-	// return (rThetaToEmbedPosition(r, theta + thetaDelta) - rThetaToEmbedPosition(r, theta)) / thetaDelta;
+	// return (rThetaToExtrinsicPosition(r, theta + thetaDelta) - rThetaToExtrinsicPosition(r, theta)) / thetaDelta;
 	return vec3(
 		-wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1) * sin(theta),
 		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1) * cos(theta),
@@ -68,12 +68,12 @@ vec3 getThetaBasisEmbed(float r, float theta) {
 }
 
 // Not necessarily r and theta input
-vec3 intrinsicToEmbedTangent(vec3 e1, vec3 e2, vec2 v) {
+vec3 intrinsicToExtrinsicTangent(vec3 e1, vec3 e2, vec2 v) {
 	return v.x * e1 + v.y * e2;
 }
 
 // Not necessarily r and theta output
-vec2 embedToIntrinsicTangent(vec3 e1, vec3 e2, vec3 v) {
+vec2 extrinsicToIntrinsicTangent(vec3 e1, vec3 e2, vec3 v) {
 	float uu = dot(e1, e1);
 	float uv = dot(e1, e2);
 	float vv = dot(e2, e2);
@@ -87,7 +87,7 @@ vec2 embedToIntrinsicTangent(vec3 e1, vec3 e2, vec3 v) {
 	);
 }
 
-vec3 embedToRealTangent(vec3 v, bool negative) {
+vec3 extrinsicToRealTangent(vec3 v, bool negative) {
 	if (!negative) {
 		return v;
 	}
@@ -177,17 +177,17 @@ void computemain() {
 
 	bool currentModeCurved = initialModeCurved;
 	vec2 currentPosition;
-	vec3 currentDirectionEmbed;
+	vec3 currentDirectionExtrinsic;
 	vec2 currentDirectionFlat;
 	if (currentModeCurved) {
 		float initialR = cameraPosition.x;
 		float initialTheta = cameraPosition.y;
-		vec3 initialRBasis = getRBasisEmbed(initialR, initialTheta);
-		vec3 initialThetaBasis = getThetaBasisEmbed(initialR, initialTheta);
+		vec3 initialRBasis = getRBasisExtrinsic(initialR, initialTheta);
+		vec3 initialThetaBasis = getThetaBasisExtrinsic(initialR, initialTheta);
 		vec3 initialNormal = normalize(cross(initialRBasis, initialThetaBasis));
-		vec3 forwardDirectionEmbed = intrinsicToEmbedTangent(initialRBasis, initialThetaBasis, cameraForward);
+		vec3 forwardDirectionExtrinsic = intrinsicToExtrinsicTangent(initialRBasis, initialThetaBasis, cameraForward);
 		currentPosition = cameraPosition;
-		currentDirectionEmbed = rotate(forwardDirectionEmbed, initialNormal, rotateAngle);
+		currentDirectionExtrinsic = rotate(forwardDirectionExtrinsic, initialNormal, rotateAngle);
 	} else {
 		currentPosition = cameraPosition;
 		currentDirectionFlat = rotate(cameraForward, rotateAngle);
@@ -213,12 +213,12 @@ void computemain() {
 			// Move (direction is parallel transported)
 			float r = currentPosition.x;
 			float theta = currentPosition.y;
-			vec3 rBasis = getRBasisEmbed(r, theta);
-			vec3 thetaBasis = getThetaBasisEmbed(r, theta);
+			vec3 rBasis = getRBasisExtrinsic(r, theta);
+			vec3 thetaBasis = getThetaBasisExtrinsic(r, theta);
 
 			// Euler
-			vec3 stepEmbed = currentDirectionEmbed * stepSize;
-			vec2 stepIntrinsic = embedToIntrinsicTangent(rBasis, thetaBasis, stepEmbed);
+			vec3 stepExtrinsic = currentDirectionExtrinsic * stepSize;
+			vec2 stepIntrinsic = extrinsicToIntrinsicTangent(rBasis, thetaBasis, stepExtrinsic);
 			vec2 newPosition = currentPosition + stepIntrinsic;
 			float newR = newPosition.x;
 			float newTheta = newPosition.y;
@@ -228,13 +228,13 @@ void computemain() {
 			float newStepR = stepR - christoffelSymbols.rThetaTheta * stepTheta * stepTheta;
 			float newStepTheta = stepTheta - 2.0 * christoffelSymbols.thetaRTheta * stepR * stepTheta; // thetaRTheta is thetaThetaR, and we are moving our displacement vector so the two Christoffel symbol terms are the same, hence double
 			vec2 newStep = vec2(newStepR, newStepTheta);
-			vec3 newRBasis = getRBasisEmbed(newR, newTheta);
-			vec3 newThetaBasis = getThetaBasisEmbed(newR, newTheta);
-			currentDirectionEmbed = normalize(intrinsicToEmbedTangent(newRBasis, newThetaBasis, newStep));
+			vec3 newRBasis = getRBasisExtrinsic(newR, newTheta);
+			vec3 newThetaBasis = getThetaBasisExtrinsic(newR, newTheta);
+			currentDirectionExtrinsic = normalize(intrinsicToExtrinsicTangent(newRBasis, newThetaBasis, newStep));
 			currentPosition = newPosition;
 
 			// Runge-Kutta 4
-			// vec2 velocity = embedToIntrinsicTangent(rBasis, thetaBasis, currentDirectionEmbed); // Intrinsic space
+			// vec2 velocity = extrinsicToIntrinsicTangent(rBasis, thetaBasis, currentDirectionExtrinsic); // Intrinsic space
 			// float timeStepSize = stepSize / stepCount;
 			// vec4 state = vec4(currentPosition, velocity);
 			// for (int i = 1; i <= stepCount; i++) {
@@ -250,10 +250,10 @@ void computemain() {
 			// vec2 vel = state.zw;
 			// float newR = pos.x;
 			// float newTheta = pos.y;
-			// vec3 newRBasis = getRBasisEmbed(newR, newTheta);
-			// vec3 newThetaBasis = getThetaBasisEmbed(newR, newTheta);
+			// vec3 newRBasis = getRBasisExtrinsic(newR, newTheta);
+			// vec3 newThetaBasis = getThetaBasisExtrinsic(newR, newTheta);
 			// currentPosition = pos;
-			// currentDirectionEmbed = normalize(intrinsicToEmbedTangent(newRBasis, newThetaBasis, vel));
+			// currentDirectionExtrinsic = normalize(intrinsicToExtrinsicTangent(newRBasis, newThetaBasis, vel));
 		} else {
 			// Move (we're in flat space)
 			currentPosition += currentDirectionFlat * stepSize;
@@ -265,7 +265,7 @@ void computemain() {
 			if (abs(r) > curvedToFlatR) {
 				float theta = currentPosition.y;
 
-				currentDirectionFlat = normalize(embedToRealTangent(currentDirectionEmbed, r < 0.0).xy);
+				currentDirectionFlat = normalize(extrinsicToRealTangent(currentDirectionExtrinsic, r < 0.0).xy);
 				currentPosition = rThetaToRealPosition(r, theta);
 				currentModeCurved = false;
 			}
@@ -293,14 +293,14 @@ void computemain() {
 
 				float theta = atan(delta.y, delta.x);
 				float r = sqrt(rho * rho - wormholeThroatRadius * wormholeThroatRadius) * rSign;
-				vec3 rBasis = getRBasisEmbed(r, theta);
-				vec3 thetaBasis = getThetaBasisEmbed(r, theta);
+				vec3 rBasis = getRBasisExtrinsic(r, theta);
+				vec3 thetaBasis = getThetaBasisExtrinsic(r, theta);
 
 				currentPosition = vec2(r, theta);
 
 				vec3 forwards3D = vec3(direction, 0.0);
-				vec2 intrinsicPreNormalise = embedToIntrinsicTangent(rBasis, thetaBasis, forwards3D);
-				currentDirectionEmbed = normalize(intrinsicToEmbedTangent(rBasis, thetaBasis, intrinsicPreNormalise));
+				vec2 intrinsicPreNormalise = extrinsicToIntrinsicTangent(rBasis, thetaBasis, forwards3D);
+				currentDirectionExtrinsic = normalize(intrinsicToExtrinsicTangent(rBasis, thetaBasis, intrinsicPreNormalise));
 
 				currentModeCurved = true;
 			}
