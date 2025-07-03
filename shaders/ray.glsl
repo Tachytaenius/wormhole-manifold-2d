@@ -48,13 +48,23 @@ vec2 rThetaToRealPosition(float r, float theta) {
 }
 
 vec3 getRBasisEmbed(float r, float theta) {
-	float rDelta = 0.1;
-	return (rThetaToEmbedPosition(r + rDelta, theta) - rThetaToEmbedPosition(r, theta)) / rDelta;
+	// float rDelta = 0.01;
+	// return (rThetaToEmbedPosition(r + rDelta, theta) - rThetaToEmbedPosition(r, theta)) / rDelta;
+	return vec3(
+		sign(wormholeThroatRadius) * r * cos(theta) / sqrt(r * r + wormholeThroatRadius * wormholeThroatRadius),
+		sign(wormholeThroatRadius) * r * sin(theta) / sqrt(r * r + wormholeThroatRadius * wormholeThroatRadius),
+		abs(wormholeThroatRadius) / sqrt(wormholeThroatRadius * wormholeThroatRadius + r * r)
+	);
 }
 
 vec3 getThetaBasisEmbed(float r, float theta) {
-	float thetaDelta = 0.1; // :3
-	return (rThetaToEmbedPosition(r, theta + thetaDelta) - rThetaToEmbedPosition(r, theta)) / thetaDelta;
+	// float thetaDelta = 0.01; // :3
+	// return (rThetaToEmbedPosition(r, theta + thetaDelta) - rThetaToEmbedPosition(r, theta)) / thetaDelta;
+	return vec3(
+		-wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1) * sin(theta),
+		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1) * cos(theta),
+		0.0
+	);
 }
 
 // Not necessarily r and theta input
@@ -139,6 +149,22 @@ vec2 flip(vec2 v) { // TODO: Rename
 	return parallelFlipped + perpendicular;
 }
 
+vec4 rk4StateDeriv(float t, vec4 state) {
+	vec2 pos = state.xy;
+	vec2 vel = state.zw;
+	ChristoffelSymbols christoffelSymbols = getChristoffelSymbols(pos.x, pos.y);
+	return vec4(
+		vel,
+		vec2(
+			-christoffelSymbols.rThetaTheta * vel.y * vel.y,
+			-(
+				christoffelSymbols.thetaRTheta * vel.x * vel.y +
+				christoffelSymbols.thetaThetaR * vel.y * vel.x
+			)
+		)
+	);
+}
+
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 void computemain() {
 	ivec2 rayMapSize = imageSize(rayMap); // Wrapped texture filtering is present on the x axis so optionally using less angles would be less convenient
@@ -189,6 +215,8 @@ void computemain() {
 			float theta = currentPosition.y;
 			vec3 rBasis = getRBasisEmbed(r, theta);
 			vec3 thetaBasis = getThetaBasisEmbed(r, theta);
+
+			// Euler
 			vec3 stepEmbed = currentDirectionEmbed * stepSize;
 			vec2 stepIntrinsic = embedToIntrinsicTangent(rBasis, thetaBasis, stepEmbed);
 			vec2 newPosition = currentPosition + stepIntrinsic;
@@ -204,6 +232,28 @@ void computemain() {
 			vec3 newThetaBasis = getThetaBasisEmbed(newR, newTheta);
 			currentDirectionEmbed = normalize(intrinsicToEmbedTangent(newRBasis, newThetaBasis, newStep));
 			currentPosition = newPosition;
+
+			// Runge-Kutta 4
+			// vec2 velocity = embedToIntrinsicTangent(rBasis, thetaBasis, currentDirectionEmbed); // Intrinsic space
+			// float timeStepSize = stepSize / stepCount;
+			// vec4 state = vec4(currentPosition, velocity);
+			// for (int i = 1; i <= stepCount; i++) {
+			// 	float t = float(i) * timeStepSize;
+			// 	// Runge-Kutta 4
+			// 	vec4 k1 = rk4StateDeriv(t, state) * timeStepSize;
+			// 	vec4 k2 = rk4StateDeriv(t + timeStepSize / 2.0, state + k1 / 2.0) * timeStepSize;
+			// 	vec4 k3 = rk4StateDeriv(t + timeStepSize / 2.0, state + k2 / 2.0) * timeStepSize;
+			// 	vec4 k4 = rk4StateDeriv(t + timeStepSize, state + k3) * timeStepSize;
+			// 	state += (k1 + k2 * 2.0 + k3 * 2.0 + k4) / 6.0;
+			// }
+			// vec2 pos = state.xy;
+			// vec2 vel = state.zw;
+			// float newR = pos.x;
+			// float newTheta = pos.y;
+			// vec3 newRBasis = getRBasisEmbed(newR, newTheta);
+			// vec3 newThetaBasis = getThetaBasisEmbed(newR, newTheta);
+			// currentPosition = pos;
+			// currentDirectionEmbed = normalize(intrinsicToEmbedTangent(newRBasis, newThetaBasis, vel));
 		} else {
 			// Move (we're in flat space)
 			currentPosition += currentDirectionFlat * stepSize;

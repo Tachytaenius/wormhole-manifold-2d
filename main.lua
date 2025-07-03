@@ -1,3 +1,7 @@
+-- TODO: Rename embed space to ambient space
+-- TODO: Visualise embedding in ambient space
+-- TODO: More varied background? So that it is easier to see just how warped your view becomes
+
 local mathsies = require("lib.mathsies")
 local vec2 = mathsies.vec2
 local vec3 = mathsies.vec3
@@ -18,6 +22,21 @@ local dummyTexture
 local stepCount
 
 local overviewMode
+
+local function euler(t, x, dt, f)
+	x = x + f(t, x) * dt
+	return x
+end
+
+local function rk4(t, x, dt, f)
+	-- Not using divisions since the x value might not support it
+	local k1 = f(t, x) * dt
+	local k2 = f(t + dt * 0.5, x + k1 * 0.5) * dt
+	local k3 = f(t + dt * 0.5, x + k2 * 0.5) * dt
+	local k4 = f(t + dt, x + k3) * dt
+	x = x + (k1 + k2 * 2 + k3 * 2 + k4) * (1 / 6)
+	return x
+end
 
 local function sign(x)
 	return x < 0 and -1 or x == 0 and 0 or 1
@@ -68,13 +87,23 @@ local function rThetaToRealPosition(r, theta)
 end
 
 local function getRBasisEmbed(r, theta)
-	local rDelta = 0.0001
-	return (rThetaToEmbedPosition(r + rDelta, theta) - rThetaToEmbedPosition(r, theta)) / rDelta
+	-- local rDelta = 0.0001
+	-- return (rThetaToEmbedPosition(r + rDelta, theta) - rThetaToEmbedPosition(r, theta)) / rDelta
+	return vec3(
+		sign(wormhole.throatRadius) * r * math.cos(theta) / math.sqrt(r * r + wormhole.throatRadius * wormhole.throatRadius),
+		sign(wormhole.throatRadius) * r * math.sin(theta) / math.sqrt(r * r + wormhole.throatRadius * wormhole.throatRadius),
+		math.abs(wormhole.throatRadius) / math.sqrt(wormhole.throatRadius * wormhole.throatRadius + r * r)
+	)
 end
 
 local function getThetaBasisEmbed(r, theta)
-	local thetaDelta = 0.0001 -- :3
-	return (rThetaToEmbedPosition(r, theta + thetaDelta) - rThetaToEmbedPosition(r, theta)) / thetaDelta
+	-- local thetaDelta = 0.0001 -- :3
+	-- return (rThetaToEmbedPosition(r, theta + thetaDelta) - rThetaToEmbedPosition(r, theta)) / thetaDelta
+	return vec3(
+		-wormhole.throatRadius * math.sqrt(r * r / (wormhole.throatRadius * wormhole.throatRadius) + 1) * math.sin(theta),
+		wormhole.throatRadius * math.sqrt(r * r / (wormhole.throatRadius * wormhole.throatRadius) + 1) * math.cos(theta),
+		0
+	)
 end
 
 -- Not necessarily r and theta input
@@ -254,7 +283,7 @@ function love.update(dt)
 
 		-- Accelerate
 		local forwardEmbed = intrinsicToEmbedTangent(rBasis, thetaBasis, camera.forward)
-		local rightEmbed = vec3.cross(normal, forwardEmbed)
+		local rightEmbed = vec3.cross(normal, forwardEmbed) -- No normalisation required
 		local velocityEmbed = intrinsicToEmbedTangent(rBasis, thetaBasis, camera.velocity)
 		local relativeVelocity = embedToIntrinsicTangent(rightEmbed, -forwardEmbed, velocityEmbed) -- Same space as targetVelocity. Not r and theta this time. Since y is forwards, we swapped forwardEmbed and rightEmbed and negated forwardEmbed
 		local newRelativeVelocity = handleVelocity(relativeVelocity, targetVelocity, dt, camera.acceleration, camera.maxSpeed)
@@ -265,25 +294,102 @@ function love.update(dt)
 		end
 
 		if #camera.velocity > 0 then -- Not sure length of r and theta vectors have much meaning besides checking whether they're a zero vector
-			-- Get r and theta movement
-			local rDisplacement, thetaDisplacement = camera.velocity.x * dt, camera.velocity.y * dt
-			local newR = r + rDisplacement
-			local newTheta = theta + thetaDisplacement
+			local method = euler
+			local steps = 1
 
-			local christoffelRThetaTheta, christoffelThetaRTheta, christoffelThetaThetaR = getChristoffelSymbols(r, theta)
-			local function parallelTransportRTheta(dR, dTheta)
-				local newDR = dR - christoffelRThetaTheta * thetaDisplacement * dTheta
-				local newDTheta = dTheta - (
-					christoffelThetaRTheta * rDisplacement * dTheta +
-					christoffelThetaThetaR * thetaDisplacement * dR
-				)
-				return vec2(newDR, newDTheta)
+			local times, positions, velocities = {}, {}, {}
+			local stepSize = dt / steps
+			local state = quat( -- HACK (vec4)
+				camera.position.x, camera.position.y,
+				camera.velocity.x, camera.velocity.y
+			)
+			for i = 1, steps do
+				local t = i * stepSize
+				state = method(t, state, stepSize, function(t, state)
+					local pos = vec2(state.x, state.y)
+					local vel = vec2(state.z, state.w)
+					local christoffelRThetaTheta, christoffelThetaRTheta, christoffelThetaThetaR = getChristoffelSymbols(pos.x, pos.y)
+					return quat( -- HACK
+						-- Position derivative
+						vel.x, vel.y,
+
+						-- Velocity derivative
+						-christoffelRThetaTheta * vel.y * vel.y,
+						-(
+							christoffelThetaRTheta * vel.x * vel.y +
+							christoffelThetaThetaR * vel.y * vel.x
+						)
+					)
+				end)
+				local pos = vec2(state.x, state.y)
+				local vel = vec2(state.z, state.w)
+				times[i] = t
+				positions[i] = pos
+				velocities[i] = vel
+			end
+			camera.position = positions[#positions]
+			camera.position = vec2(camera.position.x, camera.position.y % consts.tau)
+			camera.velocity = velocities[#velocities]
+
+			local function interpolateList(t, list)
+				local closestTimeDistance, closestTimeIndex
+				for i, time in ipairs(times) do
+					local timeDistance = math.abs(time - t)
+					if not closestTimeIndex or (timeDistance < closestTimeDistance) then
+						closestTimeDistance = timeDistance
+						closestTimeIndex = i
+					end
+				end
+				-- TODO: Lerp?
+				return list[closestTimeIndex]
+			end
+			local function getPosition(t)
+				return interpolateList(t, positions)
+			end
+			local function getVelocity(t)
+				return interpolateList(t, velocities)
+			end
+			local function parallelTransport(v)
+				-- TODO: Perform at same time as geodesic movement, as part of the state that the rest of the state (position, velocity, anything else being parallel transported) doesn't depend on?
+				for i, t in ipairs(times) do
+					v = method(t, v, stepSize, function(t, v)
+						local pos = getPosition(t)
+						local vel = getVelocity(t)
+						local christoffelRThetaTheta, christoffelThetaRTheta, christoffelThetaThetaR = getChristoffelSymbols(pos.x, pos.y)
+						return vec2(
+							-christoffelRThetaTheta * v.y * vel.y,
+							-(
+								christoffelThetaRTheta * v.x * vel.y +
+								christoffelThetaThetaR * v.y * vel.x
+							)
+						)
+					end)
+				end
+				return v
 			end
 
-			camera.position = vec2(newR, newTheta % consts.tau)
-			camera.velocity = parallelTransportRTheta(vec2.components(camera.velocity))
-			local forwardNormalisedIntrinsic = embedToIntrinsicTangent(rBasis, thetaBasis, vec3.normalise(forwardEmbed)) -- Normalised to prevent numeric drift
-			camera.forward = parallelTransportRTheta(vec2.components(forwardNormalisedIntrinsic))
+			local newRBasis, newThetaBasis = getRBasisEmbed(camera.position.x, camera.position.y), getThetaBasisEmbed(camera.position.x, camera.position.y)
+			camera.forward = embedToIntrinsicTangent(newRBasis, newThetaBasis, vec3.normalise(intrinsicToEmbedTangent(newRBasis, newThetaBasis, parallelTransport(camera.forward))))
+
+			-- Old approach:
+			-- local rDisplacement, thetaDisplacement = camera.velocity.x * dt, camera.velocity.y * dt
+			-- local newR = r + rDisplacement
+			-- local newTheta = theta + thetaDisplacement
+
+			-- local christoffelRThetaTheta, christoffelThetaRTheta, christoffelThetaThetaR = getChristoffelSymbols(r, theta)
+			-- local function parallelTransportRTheta(dR, dTheta)
+			-- 	local newDR = dR - christoffelRThetaTheta * thetaDisplacement * dTheta
+			-- 	local newDTheta = dTheta - (
+			-- 		christoffelThetaRTheta * rDisplacement * dTheta +
+			-- 		christoffelThetaThetaR * thetaDisplacement * dR
+			-- 	)
+			-- 	return vec2(newDR, newDTheta)
+			-- end
+
+			-- camera.position = vec2(newR, newTheta % consts.tau)
+			-- camera.velocity = parallelTransportRTheta(vec2.components(camera.velocity))
+			-- local forwardNormalisedIntrinsic = embedToIntrinsicTangent(rBasis, thetaBasis, vec3.normalise(forwardEmbed)) -- Normalised to prevent numeric drift
+			-- camera.forward = parallelTransportRTheta(vec2.components(forwardNormalisedIntrinsic))
 		end
 	elseif camera.mode == "flat" then
 		camera.angle = (camera.angle + angularDisplacment) % consts.tau
@@ -437,19 +543,15 @@ function love.draw()
 			rayShader:send("initialModeCurved", true)
 			rayShader:send("cameraPosition", {vec2.components(camera.position)}) -- r and theta
 			rayShader:send("cameraForward", {vec2.components(camera.forward)}) -- r and theta change
-			love.graphics.dispatchThreadgroups(
-				rayShader,
-				math.ceil(rayMapWidth / rayShader:getLocalThreadgroupSize())
-			)
 		else
 			rayShader:send("initialModeCurved", false)
 			rayShader:send("cameraPosition", {vec2.components(camera.position)})
 			rayShader:send("cameraForward", {vec2.components(vec2.fromAngle(camera.angle))})
-			love.graphics.dispatchThreadgroups(
-				rayShader,
-				math.ceil(rayMapWidth / rayShader:getLocalThreadgroupSize())
-			)
 		end
+		love.graphics.dispatchThreadgroups(
+			rayShader,
+			math.ceil(rayMapWidth / rayShader:getLocalThreadgroupSize())
+		)
 
 		love.graphics.setShader(sceneShader)
 		sceneShader:send("stepSize", consts.stepSize)
