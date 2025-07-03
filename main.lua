@@ -225,6 +225,24 @@ function love.keypressed(key)
 	end
 end
 
+local stateMetatable
+stateMetatable = {
+	__add = function(a, b) -- b is expected to be another such array
+		local new = setmetatable({}, stateMetatable)
+		for i, av in ipairs(a) do
+			new[i] = av + b[i]
+		end
+		return new
+	end,
+	__mul = function(a, b) -- b is expected to be a scalar
+		local new = setmetatable({}, stateMetatable)
+		for i, v in ipairs(a) do
+			new[i] = v * b
+		end
+		return new
+	end
+}
+
 function love.update(dt)
 	-- Get relative translation
 	local translation = vec2()
@@ -297,19 +315,20 @@ function love.update(dt)
 			local method = euler
 			local steps = 1
 
-			local times, positions, velocities = {}, {}, {}
 			local stepSize = dt / steps
-			local state = quat( -- HACK (vec4)
+			local state = setmetatable({
 				camera.position.x, camera.position.y,
-				camera.velocity.x, camera.velocity.y
-			)
+				camera.velocity.x, camera.velocity.y,
+				camera.forward.x, camera.forward.y
+			}, stateMetatable)
 			for i = 1, steps do
 				local t = i * stepSize
 				state = method(t, state, stepSize, function(t, state)
-					local pos = vec2(state.x, state.y)
-					local vel = vec2(state.z, state.w)
+					local pos = vec2(state[1], state[2])
+					local vel = vec2(state[3], state[4])
+					local forward = vec2(state[5], state[6])
 					local christoffelRThetaTheta, christoffelThetaRTheta, christoffelThetaThetaR = getChristoffelSymbols(pos.x, pos.y)
-					return quat( -- HACK
+					return setmetatable({
 						-- Position derivative
 						vel.x, vel.y,
 
@@ -318,58 +337,20 @@ function love.update(dt)
 						-(
 							christoffelThetaRTheta * vel.x * vel.y +
 							christoffelThetaThetaR * vel.y * vel.x
+						),
+
+						-- Forward vector derivative
+						-christoffelRThetaTheta * forward.y * vel.y,
+						-(
+							christoffelThetaRTheta * forward.x * vel.y +
+							christoffelThetaThetaR * forward.y * vel.x
 						)
-					)
+					}, stateMetatable)
 				end)
-				local pos = vec2(state.x, state.y)
-				local vel = vec2(state.z, state.w)
-				times[i] = t
-				positions[i] = pos
-				velocities[i] = vel
 			end
-			camera.position = positions[#positions]
-			camera.position = vec2(camera.position.x, camera.position.y % consts.tau)
-			camera.velocity = velocities[#velocities]
-
-			local function interpolateList(t, list)
-				local closestTimeDistance, closestTimeIndex
-				for i, time in ipairs(times) do
-					local timeDistance = math.abs(time - t)
-					if not closestTimeIndex or (timeDistance < closestTimeDistance) then
-						closestTimeDistance = timeDistance
-						closestTimeIndex = i
-					end
-				end
-				-- TODO: Lerp?
-				return list[closestTimeIndex]
-			end
-			local function getPosition(t)
-				return interpolateList(t, positions)
-			end
-			local function getVelocity(t)
-				return interpolateList(t, velocities)
-			end
-			local function parallelTransport(v)
-				-- TODO: Perform at same time as geodesic movement, as part of the state that the rest of the state (position, velocity, anything else being parallel transported) doesn't depend on?
-				for i, t in ipairs(times) do
-					v = method(t, v, stepSize, function(t, v)
-						local pos = getPosition(t)
-						local vel = getVelocity(t)
-						local christoffelRThetaTheta, christoffelThetaRTheta, christoffelThetaThetaR = getChristoffelSymbols(pos.x, pos.y)
-						return vec2(
-							-christoffelRThetaTheta * v.y * vel.y,
-							-(
-								christoffelThetaRTheta * v.x * vel.y +
-								christoffelThetaThetaR * v.y * vel.x
-							)
-						)
-					end)
-				end
-				return v
-			end
-
-			local newRBasis, newThetaBasis = getRBasisEmbed(camera.position.x, camera.position.y), getThetaBasisEmbed(camera.position.x, camera.position.y)
-			camera.forward = embedToIntrinsicTangent(newRBasis, newThetaBasis, vec3.normalise(intrinsicToEmbedTangent(newRBasis, newThetaBasis, parallelTransport(camera.forward))))
+			camera.position = vec2(state[1], state[2] % consts.tau)
+			camera.velocity = vec2(state[3], state[4])
+			camera.forward = vec2(state[5], state[6])
 
 			-- Old approach:
 			-- local rDisplacement, thetaDisplacement = camera.velocity.x * dt, camera.velocity.y * dt
