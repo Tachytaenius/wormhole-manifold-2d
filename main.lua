@@ -316,9 +316,12 @@ function love.update(dt)
 			local steps = 1
 
 			local stepSize = dt / steps
+			-- Parallel transported tangent vectors (such as the forward vector) are updated separately after position and velocity as this seems to maintain accuracy
 			local state = setmetatable({
 				camera.position.x, camera.position.y,
-				camera.velocity.x, camera.velocity.y,
+				camera.velocity.x, camera.velocity.y
+			}, stateMetatable)
+			local parallelTransportState = setmetatable({
 				camera.forward.x, camera.forward.y
 			}, stateMetatable)
 			for i = 1, steps do
@@ -326,7 +329,6 @@ function love.update(dt)
 				state = method(t, state, stepSize, function(t, state)
 					local pos = vec2(state[1], state[2])
 					local vel = vec2(state[3], state[4])
-					local forward = vec2(state[5], state[6])
 					local christoffelRThetaTheta, christoffelThetaRTheta, christoffelThetaThetaR = getChristoffelSymbols(pos.x, pos.y)
 					return setmetatable({
 						-- Position derivative
@@ -337,9 +339,16 @@ function love.update(dt)
 						-(
 							christoffelThetaRTheta * vel.x * vel.y +
 							christoffelThetaThetaR * vel.y * vel.x
-						),
+						)
+					}, stateMetatable)
+				end)
+				parallelTransportState = method(t, parallelTransportState, stepSize, function(t, parallelTransportState)
+					local pos = vec2(state[1], state[2])
+					local vel = vec2(state[3], state[4])
+					local christoffelRThetaTheta, christoffelThetaRTheta, christoffelThetaThetaR = getChristoffelSymbols(pos.x, pos.y)
 
-						-- Forward vector derivative
+					local forward = vec2(parallelTransportState[1], parallelTransportState[2])
+					return setmetatable({-- Forward vector derivative
 						-christoffelRThetaTheta * forward.y * vel.y,
 						-(
 							christoffelThetaRTheta * forward.x * vel.y +
@@ -360,7 +369,7 @@ function love.update(dt)
 					)
 				)
 			end
-			camera.forward = normaliseTangentInExtrinsicSpace(vec2(state[5], state[6])) -- Normalise to prevent numeric drift
+			camera.forward = normaliseTangentInExtrinsicSpace(vec2(parallelTransportState[1], parallelTransportState[2])) -- Normalise to prevent numeric drift
 
 			-- Old approach:
 			-- local rDisplacement, thetaDisplacement = camera.velocity.x * dt, camera.velocity.y * dt
