@@ -350,7 +350,17 @@ function love.update(dt)
 			end
 			camera.position = vec2(state[1], state[2] % consts.tau)
 			camera.velocity = vec2(state[3], state[4])
-			camera.forward = vec2(state[5], state[6])
+
+			local newRBasis = getRBasisExtrinsic(camera.position.x, camera.position.y)
+			local newThetaBasis = getThetaBasisExtrinsic(camera.position.x, camera.position.y)
+			local function normaliseTangentInExtrinsicSpace(v)
+				return extrinsicToIntrinsicTangent(newRBasis, newThetaBasis,
+					vec3.normalise(
+						intrinsicToExtrinsicTangent(newRBasis, newThetaBasis, v)
+					)
+				)
+			end
+			camera.forward = normaliseTangentInExtrinsicSpace(vec2(state[5], state[6])) -- Normalise to prevent numeric drift
 
 			-- Old approach:
 			-- local rDisplacement, thetaDisplacement = camera.velocity.x * dt, camera.velocity.y * dt
