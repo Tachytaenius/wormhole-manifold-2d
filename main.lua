@@ -54,6 +54,31 @@ local function rThetaToExtrinsicPosition(r, theta)
 	)
 end
 
+local function vectorLengthTangent(position, tangent)
+	-- Line element of the metric tensor
+	local r, theta = vec2.components(position)
+	local dR, dTheta = vec2.components(tangent)
+	return math.sqrt(dR ^ 2 + (r ^ 2 + wormhole.throatRadius ^ 2) * dTheta ^ 2)
+end
+
+local function normaliseTangentVector(position, tangent)
+	return tangent / vectorLengthTangent(position, tangent)
+end
+
+local function innerProduct(position, tangentA, tangentB)
+	-- From the metric tensor
+	local r, theta = vec2.components(position)
+	local dRA, dThetaA = vec2.components(tangentA)
+	local dRB, dThetaB = vec2.components(tangentB)
+	return dRA * dRB + (wormhole.throatRadius ^ 2 + r ^ 2) * dThetaA * dThetaB
+end
+
+local function perpendicularTangentVector(position, tangent) -- Can be negated for the opposite direction
+	local conversion = math.sqrt(wormhole.throatRadius ^ 2 + position.x ^ 2)
+	-- Inner product of return value with original tangent should be, mathematically, 0
+	return vec2(-tangent.y * conversion, tangent.x / conversion)
+end
+
 -- Wormhole cutoff rho grows linearly as wormhole throat radius does (all else being constant), which is nice
 local function getWormholeCutoffRho(inside)
 	-- rho = sqrt(r ^ 2 + wormhole.throatRadius ^ 2)
@@ -193,21 +218,22 @@ function love.load()
 	rayMap:setWrap("repeat", "clamp") -- x is angle, y is distance
 	dummyTexture = love.graphics.newImage(love.image.newImageData(1, 1))
 
+	wormhole = {
+		mouthAPosition = vec2(100, 200),
+		mouthBPosition = vec2(1700, 200),
+		throatRadius = 30
+	}
+	local position = vec2(0, 0)
 	camera = {
 		mode = "curved", -- "curved" or "flat"
-		position = vec2(0, 0), -- r and theta
-		forward = vec2(1, 0), -- Change in r and theta, should be length 1 when converted to extrinsic space
+		position = position, -- r and theta
+		forward = normaliseTangentVector(position, vec2(1, 0)), -- Change in r and theta, should be length 1
 		velocity = vec2(0, 0), -- Change in r and theta over time
 		angularVelocity = 0,
 		maxSpeed = 250,
 		acceleration = 750,
 		maxAngularSpeed = 2,
 		angularAcceleration = 10
-	}
-	wormhole = {
-		mouthAPosition = vec2(100, 200),
-		mouthBPosition = vec2(1700, 200),
-		throatRadius = 30
 	}
 	local minimum = getWormholeCutoffRho(true) * 2 * 1.1 -- Factor of 2 because there are two regions' radii, and extra factor is to force some padding between them
 	local distance = vec2.distance(wormhole.mouthAPosition, wormhole.mouthBPosition)
@@ -359,17 +385,7 @@ function love.update(dt)
 			end
 			camera.position = vec2(state[1], state[2] % consts.tau)
 			camera.velocity = vec2(state[3], state[4])
-
-			local newRBasis = getRBasisExtrinsic(camera.position.x, camera.position.y)
-			local newThetaBasis = getThetaBasisExtrinsic(camera.position.x, camera.position.y)
-			local function normaliseTangentInExtrinsicSpace(v)
-				return extrinsicToIntrinsicTangent(newRBasis, newThetaBasis,
-					vec3.normalise(
-						intrinsicToExtrinsicTangent(newRBasis, newThetaBasis, v)
-					)
-				)
-			end
-			camera.forward = normaliseTangentInExtrinsicSpace(vec2(parallelTransportState[1], parallelTransportState[2])) -- Normalise to prevent numeric drift
+			camera.forward = normaliseTangentVector(camera.position, vec2(parallelTransportState[1], parallelTransportState[2])) -- Normalise to prevent numeric drift
 
 			-- Old approach:
 			-- local rDisplacement, thetaDisplacement = camera.velocity.x * dt, camera.velocity.y * dt
