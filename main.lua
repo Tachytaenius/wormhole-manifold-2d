@@ -111,6 +111,14 @@ local function rThetaToRealPosition(r, theta)
 	end
 end
 
+local function getRBasisIntrinsic(r, theta)
+	return vec2(1, 0)
+end
+
+local function getThetaBasisIntrinsic(r, theta) -- Will have a length of 1, according to the line element
+	return vec2(0, 1 / math.sqrt(wormhole.throatRadius ^ 2 + r ^ 2))
+end
+
 local function getRBasisExtrinsic(r, theta)
 	-- local rDelta = 0.0001
 	-- return (rThetaToExtrinsicPosition(r + rDelta, theta) - rThetaToExtrinsicPosition(r, theta)) / rDelta
@@ -144,6 +152,20 @@ local function extrinsicToIntrinsicTangent(e1, e2, v)
 	local vv = vec3.dot(e2, e2)
 	local tu = vec3.dot(v, e1)
 	local tv = vec3.dot(v, e2)
+
+	local denominator = uu * vv - uv * uv
+	return vec2(
+		(tu * vv - tv * uv) / denominator,
+		(tv * uu - tu * uv) / denominator
+	)
+end
+
+local function changeIntrinsicBasesTangent(e1, e2, v)
+	local uu = vec2.dot(e1, e1)
+	local uv = vec2.dot(e1, e2)
+	local vv = vec2.dot(e2, e2)
+	local tu = vec2.dot(v, e1)
+	local tv = vec2.dot(v, e2)
 
 	local denominator = uu * vv - uv * uv
 	return vec2(
@@ -309,23 +331,20 @@ function love.update(dt)
 		-- Get where we are
 		local r, theta = vec2.components(camera.position)
 
-		-- Get r and theta bases as well as normal vector of surface in extrinsic space
-		local rBasis = getRBasisExtrinsic(r, theta)
-		local thetaBasis = getThetaBasisExtrinsic(r, theta)
-		local normal = vec3.normalise(vec3.cross(rBasis, thetaBasis))
+		local rBasisIntrinsic = getRBasisIntrinsic(r, theta)
+		local thetaBasisIntrinsic = getThetaBasisIntrinsic(r, theta)
 
 		-- Rotate if needed. Avoid unnecessary back-and-forth conversion that may cause numeric drift when not rotating
 		if angularDisplacment ~= 0 then
-			local forwardExtrinsic = intrinsicToExtrinsicTangent(rBasis, thetaBasis, camera.forward)
-			local axisAngle = normal * angularDisplacment
-			local quaternion = quat.fromAxisAngle(axisAngle)
-			local rotated = vec3.rotate(forwardExtrinsic, quaternion)
-			local normalised = vec3.normalise(rotated) -- Avoid numeric drift of magnitude
-			local forwardIntrinsic = extrinsicToIntrinsicTangent(rBasis, thetaBasis, normalised)
-			camera.forward = forwardIntrinsic
+			local forwardCartesian = changeIntrinsicBasesTangent(rBasisIntrinsic, thetaBasisIntrinsic, camera.forward)
+			local forwardCartesianRotated = vec2.rotate(forwardCartesian, angularDisplacment)
+			camera.forward = forwardCartesianRotated.x * rBasisIntrinsic + forwardCartesianRotated.y * thetaBasisIntrinsic
 		end
 
 		-- Accelerate
+		local rBasis = getRBasisExtrinsic(r, theta)
+		local thetaBasis = getThetaBasisExtrinsic(r, theta)
+		local normal = vec3.normalise(vec3.cross(rBasis, thetaBasis))
 		local forwardExtrinsic = intrinsicToExtrinsicTangent(rBasis, thetaBasis, camera.forward)
 		local rightExtrinsic = vec3.cross(normal, forwardExtrinsic) -- No normalisation required
 		local velocityExtrinsic = intrinsicToExtrinsicTangent(rBasis, thetaBasis, camera.velocity)
@@ -386,26 +405,6 @@ function love.update(dt)
 			camera.position = vec2(state[1], state[2] % consts.tau)
 			camera.velocity = vec2(state[3], state[4])
 			camera.forward = normaliseTangentVector(camera.position, vec2(parallelTransportState[1], parallelTransportState[2])) -- Normalise to prevent numeric drift
-
-			-- Old approach:
-			-- local rDisplacement, thetaDisplacement = camera.velocity.x * dt, camera.velocity.y * dt
-			-- local newR = r + rDisplacement
-			-- local newTheta = theta + thetaDisplacement
-
-			-- local christoffelRThetaTheta, christoffelThetaRTheta, christoffelThetaThetaR = getChristoffelSymbols(r, theta)
-			-- local function parallelTransportRTheta(dR, dTheta)
-			-- 	local newDR = dR - christoffelRThetaTheta * thetaDisplacement * dTheta
-			-- 	local newDTheta = dTheta - (
-			-- 		christoffelThetaRTheta * rDisplacement * dTheta +
-			-- 		christoffelThetaThetaR * thetaDisplacement * dR
-			-- 	)
-			-- 	return vec2(newDR, newDTheta)
-			-- end
-
-			-- camera.position = vec2(newR, newTheta % consts.tau)
-			-- camera.velocity = parallelTransportRTheta(vec2.components(camera.velocity))
-			-- local forwardNormalisedIntrinsic = extrinsicToIntrinsicTangent(rBasis, thetaBasis, vec3.normalise(forwardExtrinsic)) -- Normalised to prevent numeric drift
-			-- camera.forward = parallelTransportRTheta(vec2.components(forwardNormalisedIntrinsic))
 		end
 	elseif camera.mode == "flat" then
 		camera.angle = (camera.angle + angularDisplacment) % consts.tau
