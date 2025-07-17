@@ -165,6 +165,14 @@ vec4 rk4StateDeriv(float t, vec4 state) {
 	);
 }
 
+float vectorLengthTangent(vec2 position, vec2 tangent) {
+	return sqrt(tangent.x * tangent.x + (position.x * position.x + wormholeThroatRadius * wormholeThroatRadius) * tangent.y * tangent.y);
+}
+
+vec2 normaliseTangentVector(vec2 position, vec2 tangent) {
+	return tangent / vectorLengthTangent(position, tangent);
+}
+
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 void computemain() {
 	ivec2 rayMapSize = imageSize(rayMap); // Wrapped texture filtering is present on the x axis so optionally using less angles would be less convenient
@@ -177,7 +185,7 @@ void computemain() {
 
 	bool currentModeCurved = initialModeCurved;
 	vec2 currentPosition;
-	vec3 currentDirectionExtrinsic;
+	vec2 velocityIntrinsic;
 	vec2 currentDirectionFlat;
 	if (currentModeCurved) {
 		float initialR = cameraPosition.x;
@@ -187,7 +195,8 @@ void computemain() {
 		vec3 initialNormal = normalize(cross(initialRBasis, initialThetaBasis));
 		vec3 forwardDirectionExtrinsic = intrinsicToExtrinsicTangent(initialRBasis, initialThetaBasis, cameraForward);
 		currentPosition = cameraPosition;
-		currentDirectionExtrinsic = rotate(forwardDirectionExtrinsic, initialNormal, rotateAngle);
+		vec3 currentDirectionExtrinsic = rotate(forwardDirectionExtrinsic, initialNormal, rotateAngle) * stepSize;
+		velocityIntrinsic = extrinsicToIntrinsicTangent(initialRBasis, initialThetaBasis, currentDirectionExtrinsic);
 	} else {
 		currentPosition = cameraPosition;
 		currentDirectionFlat = rotate(cameraForward, rotateAngle);
@@ -211,29 +220,22 @@ void computemain() {
 
 		if (currentModeCurved) {
 			// Move (direction is parallel transported)
-			float r = currentPosition.x;
-			float theta = currentPosition.y;
-			vec3 rBasis = getRBasisExtrinsic(r, theta);
-			vec3 thetaBasis = getThetaBasisExtrinsic(r, theta);
 
 			// Euler
-			vec3 stepExtrinsic = currentDirectionExtrinsic * stepSize;
-			vec2 stepIntrinsic = extrinsicToIntrinsicTangent(rBasis, thetaBasis, stepExtrinsic);
-			vec2 newPosition = currentPosition + stepIntrinsic;
-			float newR = newPosition.x;
-			float newTheta = newPosition.y;
-			float stepR = stepIntrinsic.x;
-			float stepTheta = stepIntrinsic.y;
+			vec2 newPosition = currentPosition + velocityIntrinsic; // Velocity is already at step size
+			float velR = velocityIntrinsic.x;
+			float velTheta = velocityIntrinsic.y;
 			ChristoffelSymbols christoffelSymbols = getChristoffelSymbols(r, theta);
-			float newStepR = stepR - christoffelSymbols.rThetaTheta * stepTheta * stepTheta;
-			float newStepTheta = stepTheta - 2.0 * christoffelSymbols.thetaRTheta * stepR * stepTheta; // thetaRTheta is thetaThetaR, and we are moving our displacement vector so the two Christoffel symbol terms are the same, hence double
-			vec2 newStep = vec2(newStepR, newStepTheta);
-			vec3 newRBasis = getRBasisExtrinsic(newR, newTheta);
-			vec3 newThetaBasis = getThetaBasisExtrinsic(newR, newTheta);
-			currentDirectionExtrinsic = normalize(intrinsicToExtrinsicTangent(newRBasis, newThetaBasis, newStep));
+			float newVelR = velR - christoffelSymbols.rThetaTheta * velTheta * velTheta;
+			float newVelTheta = velTheta - 2.0 * christoffelSymbols.thetaRTheta * velR * velTheta; // thetaRTheta is thetaThetaR, and we are moving our velocity vector so the two Christoffel symbol terms are the same, hence double
+			velocityIntrinsic = vec2(newVelR, newVelTheta);
 			currentPosition = newPosition;
 
-			// Runge-Kutta 4
+			// Runge-Kutta 4 (for when the surrounding code was different; this is not maintained)
+			// float r = currentPosition.x;
+			// float theta = currentPosition.y;
+			// vec3 rBasis = getRBasisExtrinsic(r, theta);
+			// vec3 thetaBasis = getThetaBasisExtrinsic(r, theta);
 			// vec2 velocity = extrinsicToIntrinsicTangent(rBasis, thetaBasis, currentDirectionExtrinsic); // Intrinsic space
 			// float timeStepSize = stepSize / stepCount;
 			// vec4 state = vec4(currentPosition, velocity);
@@ -265,6 +267,9 @@ void computemain() {
 			if (abs(r) > curvedToFlatR) {
 				float theta = currentPosition.y;
 
+				vec3 rBasis = getRBasisExtrinsic(currentPosition.x, currentPosition.y);
+				vec3 thetaBasis = getThetaBasisExtrinsic(currentPosition.x, currentPosition.y);
+				vec3 currentDirectionExtrinsic = intrinsicToExtrinsicTangent(rBasis, thetaBasis, velocityIntrinsic);
 				currentDirectionFlat = normalize(extrinsicToRealTangent(currentDirectionExtrinsic, r < 0.0).xy);
 				currentPosition = rThetaToRealPosition(r, theta);
 				currentModeCurved = false;
@@ -298,9 +303,8 @@ void computemain() {
 
 				currentPosition = vec2(r, theta);
 
-				vec3 forwards3D = vec3(direction, 0.0);
-				vec2 intrinsicPreNormalise = extrinsicToIntrinsicTangent(rBasis, thetaBasis, forwards3D);
-				currentDirectionExtrinsic = normalize(intrinsicToExtrinsicTangent(rBasis, thetaBasis, intrinsicPreNormalise));
+				vec3 forwardsExtrinsic = normalize(vec3(direction, 0.0)) * stepSize;
+				velocityIntrinsic = extrinsicToIntrinsicTangent(rBasis, thetaBasis, forwardsExtrinsic);
 
 				currentModeCurved = true;
 			}
