@@ -269,7 +269,7 @@ function love.load()
 		mouthBPosition = vec2(1700, 200),
 		throatRadius = 30
 	}
-	local position = vec2(40, 0)
+	local position = vec2(0, 0)
 	local forward = normaliseTangentVector(position, vec2(1, 0))
 	-- Commented out are the (not-going-to-be-maintained) initial conditions for a spiralling into the wormhole and coming out again, found from working in GeodesicViewer
 	-- Timestep variation causes varied results even with rk4 with 200 steps.
@@ -359,11 +359,6 @@ stateMetatable = {
 }
 
 function love.update(dt)
-	if love.keyboard.isDown("r") then
-		-- Rotate to face photon sphere (er, circle)
-		
-	end
-
 	local moveEmbedCamera = love.keyboard.isDown("lshift")
 
 	if moveEmbedCamera then
@@ -412,7 +407,7 @@ function love.update(dt)
 	end
 
 	local targetVelocity = vec2()
-	local angularDisplacment = 0
+	local targetAngularVelocity = 0
 	if not moveEmbedCamera then
 		local speedMultiplier = love.keyboard.isDown("lctrl") and 0.01 or 1
 
@@ -444,12 +439,13 @@ function love.update(dt)
 		if love.keyboard.isDown(".") then
 			rotation = rotation + 1
 		end
-		local targetAngularVelocity = rotation * camera.maxAngularSpeed * speedMultiplier
-		local angleDifference = targetAngularVelocity - camera.angularVelocity
-		local newAngleDistance = math.max(0, math.abs(angleDifference) - camera.angularAcceleration * dt)
-		camera.angularVelocity = targetAngularVelocity - sign(angleDifference) * newAngleDistance
-		angularDisplacment = camera.angularVelocity * dt
+		targetAngularVelocity = rotation * camera.maxAngularSpeed * speedMultiplier
 	end
+
+	local angleDifference = targetAngularVelocity - camera.angularVelocity
+	local newAngleDistance = math.max(0, math.abs(angleDifference) - camera.angularAcceleration * dt)
+	camera.angularVelocity = targetAngularVelocity - sign(angleDifference) * newAngleDistance
+	local angularDisplacment = camera.angularVelocity * dt
 
 	if camera.mode == "curved" then
 		-- Get where we are
