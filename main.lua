@@ -1,4 +1,3 @@
--- TODO: Visualise embedding in ambient space
 -- TODO: More varied background? So that it is easier to see just how warped your view becomes
 -- TODO: Match geodesics on Wikipedia page for Ellis wormhole. What am I missing?? Lightlike/timelike/spacelike geodesics...?
 
@@ -6,15 +5,22 @@ local mathsies = require("lib.mathsies")
 local vec2 = mathsies.vec2
 local vec3 = mathsies.vec3
 local quat = mathsies.quat
+local mat4 = mathsies.mat4
 
 local consts = require("consts")
 
 local camera
+local embedCamera
 local wormhole
 local time
 
+local surfaceMesh, surfaceResolution
+local objectCanvas
+local objectOverlayTexture
+
 local rayShader
 local sceneShader
+local objectShader
 
 local rayMap
 local dummyTexture
@@ -216,6 +222,14 @@ local function normaliseOrZero3(v) -- 3 for vec3
 	return v / magnitude
 end
 
+local function limitVectorLength3(v, m)
+	local l = #v
+	if l > m then
+		return normaliseOrZero3(v) * m
+	end
+	return vec3.clone(v)
+end
+
 local function moveVectorToTarget2(current, target, rate, dt) -- 2 for vec2
 	local currentToTarget = target - current
 	local direction = normaliseOrZero2(currentToTarget)
@@ -229,7 +243,14 @@ local function handleVelocity(current, target, dt, acceleration, maxSpeed)
 end
 
 function love.load()
-	rayShader = love.graphics.newComputeShader("shaders/ray.glsl")
+	rayShader = love.graphics.newComputeShader(
+		love.filesystem.read("shaders/include/shape.glsl") ..
+		love.filesystem.read("shaders/ray.glsl")
+	)
+	objectShader = love.graphics.newShader(
+		love.filesystem.read("shaders/include/shape.glsl") ..
+		love.filesystem.read("shaders/object.glsl")
+	)
 	sceneShader = love.graphics.newShader("shaders/scene.glsl")
 	local width, height = love.graphics.getWidth()
 	local centreToCorner = #vec2(width, height) / 2 -- Order of operations doesn't matter
@@ -239,23 +260,45 @@ function love.load()
 	rayMap:setFilter("linear", "linear")
 	rayMap:setWrap("repeat", "clamp") -- x is angle, y is distance
 	dummyTexture = love.graphics.newImage(love.image.newImageData(1, 1))
+	objectCanvas = love.graphics.newCanvas(400, 400)
+	objectOverlayTexture = love.graphics.newCanvas(4096, 4096, {computewrite = true})
+	objectOverlayTexture:setFilter("nearest")
 
 	wormhole = {
 		mouthAPosition = vec2(100, 200),
 		mouthBPosition = vec2(1700, 200),
 		throatRadius = 30
 	}
-	local position = vec2(0, 0)
+	local position = vec2(40, 0)
+	local forward = normaliseTangentVector(position, vec2(1, 0))
+	-- Commented out are the (not-going-to-be-maintained) initial conditions for a spiralling into the wormhole and coming out again, found from working in GeodesicViewer
+	-- Timestep variation causes varied results even with rk4 with 200 steps.
+	-- GeodesicViewer can be found at https://github.com/tauzero7/GeodesicViewer
+	-- local r, theta = vec2.components(position)
+	-- local rBasisIntrinsic = getRBasisIntrinsic(r, theta)
+	-- local thetaBasisIntrinsic = getThetaBasisIntrinsic(r, theta)
+	-- local forwardCartesian = changeIntrinsicBasesTangent(rBasisIntrinsic, thetaBasisIntrinsic, forward)
+	-- local forwardCartesianRotated = vec2.rotate(forwardCartesian, math.rad(216.87100000))
+	-- forward = forwardCartesianRotated.x * rBasisIntrinsic + forwardCartesianRotated.y * thetaBasisIntrinsic
 	camera = {
 		mode = "curved", -- "curved" or "flat"
 		position = position, -- r and theta
-		forward = normaliseTangentVector(position, vec2(1, 0)), -- Change in r and theta, should be length 1
+		forward = forward, -- Change in r and theta, should be length 1
 		velocity = vec2(0, 0), -- Change in r and theta over time
 		angularVelocity = 0,
 		maxSpeed = 250,
 		acceleration = 750,
 		maxAngularSpeed = 2,
 		angularAcceleration = 10
+	}
+	embedCamera = {
+		position = vec3(0, 100, 200),
+		orientation = quat.fromAxisAngle(vec3(consts.tau / 2 * 0.8, 0, 0)),
+		speed = 200,
+		angularSpeed = 2,
+		verticalFOV = math.rad(70),
+		farPlaneDistance = 10000,
+		nearPlaneDistance = 0.1
 	}
 	local minimum = getWormholeCutoffRho(true) * 2 * 1.1 -- Factor of 2 because there are two regions' radii, and extra factor is to force some padding between them
 	local distance = vec2.distance(wormhole.mouthAPosition, wormhole.mouthBPosition)
@@ -264,6 +307,30 @@ function love.load()
 		"Wormhole cutoff regions overlap, minimum distance given settings is " .. minimum .. ", current distance is " .. distance
 	)
 	overviewMode = false
+
+	local vertices = {}
+	surfaceResolution = 256
+	local function v(x, y)
+		x = (x * 2 - 1) * math.sqrt(getWormholeCutoffRho(true) ^ 2 - wormhole.throatRadius ^ 2)
+		y = y * consts.tau
+		vertices[#vertices + 1] = {x, y}
+	end
+	for x = 0, surfaceResolution - 1 do
+		for y = 0, surfaceResolution - 1 do
+			local x1, y1 = x / surfaceResolution, y / surfaceResolution
+			local x2, y2 = (x + 1) / surfaceResolution, (y + 1) / surfaceResolution
+
+			v(x1, y1)
+			v(x2, y1)
+			v(x1, y2)
+
+			v(x2, y2)
+			v(x1, y2)
+			v(x2, y1)
+		end
+	end
+	surfaceMesh = love.graphics.newMesh(consts.objectVertexFormat, vertices, "triangles")
+	
 	time = 0
 end
 
@@ -292,40 +359,97 @@ stateMetatable = {
 }
 
 function love.update(dt)
-	-- Get relative translation
-	local translation = vec2()
-	if love.keyboard.isDown("w") then
-		translation.y = translation.y - 1
-	end
-	if love.keyboard.isDown("a") then
-		translation.x = translation.x - 1
-	end
-	if love.keyboard.isDown("s") then
-		translation.y = translation.y + 1
-	end
-	if love.keyboard.isDown("d") then
-		translation.x = translation.x + 1
-	end
-	local targetVelocity
-	if #translation == 0 then
-		targetVelocity = vec2()
-	else
-		targetVelocity = vec2.normalise(translation) * camera.maxSpeed
+	if love.keyboard.isDown("r") then
+		-- Rotate to face photon sphere (er, circle)
+		
 	end
 
-	-- Get relative rotation
-	local rotation = 0
-	if love.keyboard.isDown(",") then
-		rotation = rotation - 1
+	local moveEmbedCamera = love.keyboard.isDown("lshift")
+
+	if moveEmbedCamera then
+		local translation = vec3()
+		if love.keyboard.isDown("d") then
+			translation = translation + consts.rightVector
+		end
+		if love.keyboard.isDown("a") then
+			translation = translation - consts.rightVector
+		end
+		if love.keyboard.isDown("e") then
+			translation = translation + consts.upVector
+		end
+		if love.keyboard.isDown("q") then
+			translation = translation - consts.upVector
+		end
+		if love.keyboard.isDown("w") then
+			translation = translation + consts.forwardVector
+		end
+		if love.keyboard.isDown("s") then
+			translation = translation - consts.forwardVector
+		end
+		embedCamera.position = embedCamera.position + vec3.rotate(normaliseOrZero3(translation), embedCamera.orientation) * embedCamera.speed * dt
+
+		local rotation = vec3()
+		if love.keyboard.isDown("k") then
+			rotation = rotation + consts.rightVector
+		end
+		if love.keyboard.isDown("i") then
+			rotation = rotation - consts.rightVector
+		end
+		if love.keyboard.isDown("l") then
+			rotation = rotation + consts.upVector
+		end
+		if love.keyboard.isDown("j") then
+			rotation = rotation - consts.upVector
+		end
+		if love.keyboard.isDown("u") then
+			rotation = rotation + consts.forwardVector
+		end
+		if love.keyboard.isDown("o") then
+			rotation = rotation - consts.forwardVector
+		end
+		local rotationQuat = quat.fromAxisAngle(limitVectorLength3(rotation, embedCamera.angularSpeed * dt))
+		embedCamera.orientation = quat.normalise(embedCamera.orientation * rotationQuat) -- Normalise to prevent numeric drift
 	end
-	if love.keyboard.isDown(".") then
-		rotation = rotation + 1
+
+	local targetVelocity = vec2()
+	local angularDisplacment = 0
+	if not moveEmbedCamera then
+		local speedMultiplier = love.keyboard.isDown("lctrl") and 0.01 or 1
+
+		-- Get relative translation
+		local translation = vec2()
+		if love.keyboard.isDown("w") then
+			translation.y = translation.y - 1
+		end
+		if love.keyboard.isDown("a") then
+			translation.x = translation.x - 1
+		end
+		if love.keyboard.isDown("s") then
+			translation.y = translation.y + 1
+		end
+		if love.keyboard.isDown("d") then
+			translation.x = translation.x + 1
+		end
+		if #translation == 0 then
+			targetVelocity = vec2()
+		else
+			targetVelocity = vec2.normalise(translation) * camera.maxSpeed * speedMultiplier
+		end
+
+		-- Get relative rotation
+		local rotation = 0
+		if love.keyboard.isDown(",") then
+			rotation = rotation - 1
+		end
+		if love.keyboard.isDown(".") then
+			rotation = rotation + 1
+		end
+		local targetAngularVelocity = rotation * camera.maxAngularSpeed * speedMultiplier
+		local angleDifference = targetAngularVelocity - camera.angularVelocity
+		local newAngleDistance = math.max(0, math.abs(angleDifference) - camera.angularAcceleration * dt)
+		camera.angularVelocity = targetAngularVelocity - sign(angleDifference) * newAngleDistance
+		angularDisplacment = camera.angularVelocity * dt
 	end
-	local targetAngularVelocity = rotation * camera.maxAngularSpeed
-	local angleDifference = targetAngularVelocity - camera.angularVelocity
-	local newAngleDistance = math.max(0, math.abs(angleDifference) - camera.angularAcceleration * dt)
-	camera.angularVelocity = targetAngularVelocity - sign(angleDifference) * newAngleDistance
-	local angularDisplacment = camera.angularVelocity * dt
 
 	if camera.mode == "curved" then
 		-- Get where we are
@@ -357,8 +481,8 @@ function love.update(dt)
 		end
 
 		if #camera.velocity > 0 then -- Not sure length of r and theta vectors have much meaning besides checking whether they're a zero vector
-			local method = euler
-			local steps = 1
+			local method = rk4
+			local steps = 200
 
 			local stepSize = dt / steps
 			-- Parallel transported tangent vectors (such as the forward vector) are updated separately after position and velocity as this seems to maintain accuracy
@@ -501,6 +625,12 @@ function love.update(dt)
 end
 
 function love.draw()
+	love.graphics.setCanvas(objectOverlayTexture)
+	love.graphics.clear()
+	love.graphics.setPointSize(5)
+	love.graphics.points((camera.position.x / math.sqrt(getWormholeCutoffRho(true) ^ 2 - wormhole.throatRadius ^ 2) * 0.5 + 0.5) * objectOverlayTexture:getWidth(), camera.position.y / consts.tau * objectOverlayTexture:getHeight())
+	love.graphics.setCanvas()
+
 	if overviewMode then
 		love.graphics.translate(love.graphics.getWidth() / 2, love.graphics.getHeight() / 2)
 		love.graphics.setPointSize(5)
@@ -554,6 +684,13 @@ function love.draw()
 		rayShader:send("curvedToFlatR", math.sqrt(getWormholeCutoffRho(true) ^ 2 - wormhole.throatRadius ^ 2))
 		rayShader:send("flatToCurvedRho", getWormholeCutoffRho(false))
 
+		rayShader:send("overlay", objectOverlayTexture)
+		rayShader:send("overlaySize", {objectOverlayTexture:getDimensions()})
+		rayShader:send("drawToOverlay", true)
+		rayShader:send("drawOverlayToRay", true)
+		rayShader:send("overlayDistanceLineSteps", 4)
+		rayShader:send("maxOverlayDistanceLines", 8)
+
 		if camera.mode == "curved" then
 			rayShader:send("initialModeCurved", true)
 			rayShader:send("cameraPosition", {vec2.components(camera.position)}) -- r and theta
@@ -574,9 +711,40 @@ function love.draw()
 		sceneShader:send("rayMap", rayMap)
 		love.graphics.draw(dummyTexture, 0, 0, 0, love.graphics.getDimensions())
 		love.graphics.setShader()
-
-		-- love.graphics.draw(rayMap)
 	end
+
+	love.graphics.setCanvas({objectCanvas, depth = true})
+	love.graphics.setDepthMode("lequal", true)
+	love.graphics.clear(0, 0, 0)
+	local worldToCamera = mat4.camera(embedCamera.position, embedCamera.orientation)
+	local worldToCameraStationary = mat4.camera(vec3(), embedCamera.orientation)
+	local cameraToClip = mat4.perspectiveLeftHanded(
+		objectCanvas:getWidth() / objectCanvas:getHeight(),
+		embedCamera.verticalFOV,
+		embedCamera.farPlaneDistance,
+		embedCamera.nearPlaneDistance
+	)
+	local worldToClip = cameraToClip * worldToCamera
+	local clipToSky = mat4.inverse(cameraToClip * worldToCameraStationary)
+	love.graphics.setShader(objectShader)
+	objectShader:send("wormholeThroatRadius", wormhole.throatRadius)
+	objectShader:send("wormholeMouthAPosition", {vec2.components(wormhole.mouthAPosition)})
+	objectShader:send("wormholeMouthBPosition", {vec2.components(wormhole.mouthBPosition)})
+	objectShader:send("modelToClip", {mat4.components(worldToClip)})
+	if objectShader:hasUniform("time") then
+		objectShader:send("time", time)
+	end
+	objectShader:send("overlay", objectOverlayTexture)
+	objectShader:send("gridSpacing", 32)
+	objectShader:send("gridCells", 60) -- Per axis
+	objectShader:send("gridLineThickness", 4)
+	objectShader:send("wormholeCutoffR", math.sqrt(getWormholeCutoffRho(true) ^ 2 - wormhole.throatRadius ^ 2))
+	love.graphics.draw(surfaceMesh)
+	love.graphics.setCanvas()
+	love.graphics.setShader()
+	love.graphics.setDepthMode("always", false)
+	love.graphics.draw(objectCanvas)
+	love.graphics.rectangle("line", 0, 0, objectCanvas:getDimensions())
 
 	love.graphics.print(love.timer.getFPS())
 end

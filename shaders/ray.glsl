@@ -1,6 +1,14 @@
-const float tau = 6.28318530718;
+#line 1
 
 uniform layout(rgba8) image2D rayMap;
+uniform layout (rgba8) image2D overlay;
+uniform bool drawToOverlay;
+uniform bool drawOverlayToRay;
+uniform int overlayAngleLines;
+uniform int overlayDistanceLineSteps;
+uniform int maxOverlayDistanceLines;
+uniform int maxAngleLineLength;
+uniform ivec2 overlaySize;
 
 uniform int stepCount;
 uniform float stepSize;
@@ -8,127 +16,9 @@ uniform float stepSize;
 uniform vec2 cameraPosition;
 uniform vec2 cameraForward;
 
-uniform float gridSpacing;
-uniform uint gridCells;
-uniform float gridLineThickness;
-
-uniform float wormholeThroatRadius;
-uniform vec2 wormholeMouthAPosition;
-uniform vec2 wormholeMouthBPosition;
-
 uniform bool initialModeCurved;
 uniform float curvedToFlatR;
 uniform float flatToCurvedRho;
-
-vec3 rThetaToExtrinsicPosition(float r, float theta) {
-	return vec3(
-		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * cos(theta),
-		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * sin(theta),
-		wormholeThroatRadius * asinh(r / wormholeThroatRadius)
-	);
-}
-
-vec2 rThetaToRealPosition(float r, float theta) {
-	vec2 catenoid = vec2(
-		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * cos(theta),
-		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1.0) * sin(theta)
-	);
-
-	if (r >= 0.0) {
-		return wormholeMouthAPosition + catenoid;
-	} else {
-		vec2 delta = wormholeMouthBPosition - wormholeMouthAPosition;
-		vec2 direction = normalize(delta);
-		vec2 parallel = direction * dot(catenoid, direction);
-		vec2 perpendicular = catenoid - parallel;
-		vec2 parallelFlipped = -parallel;
-		vec2 catenoidFlipped = parallelFlipped + perpendicular;
-		return wormholeMouthBPosition + catenoidFlipped;
-	}
-}
-
-vec3 getRBasisExtrinsic(float r, float theta) {
-	// float rDelta = 0.01;
-	// return (rThetaToExtrinsicPosition(r + rDelta, theta) - rThetaToExtrinsicPosition(r, theta)) / rDelta;
-	return vec3(
-		sign(wormholeThroatRadius) * r * cos(theta) / sqrt(r * r + wormholeThroatRadius * wormholeThroatRadius),
-		sign(wormholeThroatRadius) * r * sin(theta) / sqrt(r * r + wormholeThroatRadius * wormholeThroatRadius),
-		abs(wormholeThroatRadius) / sqrt(wormholeThroatRadius * wormholeThroatRadius + r * r)
-	);
-}
-
-vec3 getThetaBasisExtrinsic(float r, float theta) {
-	// float thetaDelta = 0.01; // :3
-	// return (rThetaToExtrinsicPosition(r, theta + thetaDelta) - rThetaToExtrinsicPosition(r, theta)) / thetaDelta;
-	return vec3(
-		-wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1) * sin(theta),
-		wormholeThroatRadius * sqrt(r * r / (wormholeThroatRadius * wormholeThroatRadius) + 1) * cos(theta),
-		0.0
-	);
-}
-
-// Not necessarily r and theta input
-vec3 intrinsicToExtrinsicTangent(vec3 e1, vec3 e2, vec2 v) {
-	return v.x * e1 + v.y * e2;
-}
-
-// Not necessarily r and theta output
-vec2 extrinsicToIntrinsicTangent(vec3 e1, vec3 e2, vec3 v) {
-	float uu = dot(e1, e1);
-	float uv = dot(e1, e2);
-	float vv = dot(e2, e2);
-	float tu = dot(v, e1);
-	float tv = dot(v, e2);
-
-	float denominator = uu * vv - uv * uv;
-	return vec2(
-		(tu * vv - tv * uv) / denominator,
-		(tv * uu - tu * uv) / denominator
-	);
-}
-
-vec3 extrinsicToRealTangent(vec3 v, bool negative) {
-	if (!negative) {
-		return v;
-	}
-	vec2 delta = wormholeMouthBPosition - wormholeMouthAPosition;
-	vec3 delta3D = vec3(delta.x, delta.y, 0.0);
-	vec3 direction = normalize(delta3D);
-	vec3 parallel = direction * dot(v, direction);
-	vec3 perpendicular = v - parallel;
-	vec3 parallelFlipped = -parallel;
-	return parallelFlipped + perpendicular;
-}
-
-struct ChristoffelSymbols {
-	float rThetaTheta;
-	float thetaRTheta;
-	float thetaThetaR;
-};
-
-ChristoffelSymbols getChristoffelSymbols(float r, float theta) {
-	return ChristoffelSymbols (
-		-r,
-		r / (wormholeThroatRadius * wormholeThroatRadius + r * r),
-		r / (wormholeThroatRadius * wormholeThroatRadius + r * r)
-	);
-}
-
-vec3 sampleBackground(vec2 position) {
-	vec2 rg = position.xy / (gridSpacing * gridCells);
-	// vec2 rg = vec2(1.0, 0.0);
-	// if (
-	// 	distance(position, wormholeMouthAPosition) >
-	// 	distance(position, wormholeMouthBPosition)
-	// ) {
-	// 	rg.rg = rg.gr;
-	// }
-	vec2 cellPos = mod(position.xy, vec2(gridSpacing));
-	if (min(cellPos.x, cellPos.y) < gridLineThickness) {
-		return vec3(rg, 1.0);
-	}
-	return vec3(rg, 0.0);
-}
 
 vec2 rotate(vec2 v, float a) {
 	float s = sin(a);
@@ -210,8 +100,36 @@ void computemain() {
 			currentRealPosition = currentPosition;
 		}
 
+		bool overlayPixel = stepNumber % overlayDistanceLineSteps == 0 && stepNumber / overlayDistanceLineSteps < maxOverlayDistanceLines;
+		int maxLen = maxOverlayDistanceLines * overlayDistanceLineSteps;
+		float proportion = float(rayMapX) / float(rayMapSize.x);
+		if (0.745 < proportion && proportion < 0.755) {
+			maxLen *= 2;
+		}
+		overlayPixel = overlayPixel || (mod(float(rayMapX) / float(rayMapSize.x), 0.125) < 0.125 * 0.0625 && stepNumber < maxLen);
+
+		if (drawToOverlay) {
+			// Write to overlay
+			vec2 overlayTextureCoords = vec2(
+				currentPosition.x / curvedToFlatR * 0.5 + 0.5,
+				currentPosition.y / tau
+			);
+			if (overlayPixel) {
+				imageStore(
+					overlay,
+					ivec2(overlayTextureCoords * vec2(overlaySize)) % overlaySize,
+					vec4(1.0)
+				);
+			}
+		}
+
+		colourHere = sampleBackground(currentPosition.x, currentPosition.y, currentRealPosition);
+		if (drawOverlayToRay && overlayPixel) {
+			colourHere = vec3(1.0);
+		};
+
 		// Sample and store
-		colourHere = sampleBackground(currentRealPosition);
+		colourHere = sampleBackground(currentPosition.x, currentPosition.y, currentRealPosition);
 		imageStore(
 			rayMap,
 			ivec2(rayMapX, stepNumber),
