@@ -220,6 +220,8 @@ void computemain() {
 
 		if (currentModeCurved) {
 			// Move (direction is parallel transported)
+			float r = currentPosition.x;
+			float theta = currentPosition.y;
 
 			// Euler
 			vec2 newPosition = currentPosition + velocityIntrinsic; // Velocity is already at step size
@@ -232,8 +234,6 @@ void computemain() {
 			currentPosition = newPosition;
 
 			// Runge-Kutta 4 (for when the surrounding code was different; this is not maintained)
-			// float r = currentPosition.x;
-			// float theta = currentPosition.y;
 			// vec3 rBasis = getRBasisExtrinsic(r, theta);
 			// vec3 thetaBasis = getThetaBasisExtrinsic(r, theta);
 			// vec2 velocity = extrinsicToIntrinsicTangent(rBasis, thetaBasis, currentDirectionExtrinsic); // Intrinsic space
