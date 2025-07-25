@@ -37,7 +37,7 @@ void pixelmain() {
 	vec2 realPosition = rThetaToRealPosition(vertexPosition.x, vertexPosition.y);
 	fragmentColour = vec4(
 		mix(
-			sampleBackground(vertexPosition.x, vertexPosition.y, realPosition),
+			sampleBackground(vertexPosition.x, vertexPosition.y, realPosition, true),
 			overlayHere.rgb,
 			overlayHere.a
 		),

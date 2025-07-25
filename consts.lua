@@ -4,6 +4,7 @@ local consts = {}
 
 consts.tau = math.pi * 2
 
+consts.zoom = 1.5 -- CHanges size of the camera indicator too, but doesn't matter
 consts.stepSize = 0.5
 consts.wormholeCutoffGradient = 0.05
 consts.wormholeCutoffRhoMultiplier = 0.01

@@ -624,7 +624,9 @@ function love.draw()
 	love.graphics.setCanvas(objectOverlayTexture)
 	love.graphics.clear()
 	love.graphics.setPointSize(5)
-	love.graphics.points((camera.position.x / math.sqrt(getWormholeCutoffRho(true) ^ 2 - wormhole.throatRadius ^ 2) * 0.5 + 0.5) * objectOverlayTexture:getWidth(), camera.position.y / consts.tau * objectOverlayTexture:getHeight())
+	if camera.mode == "curved" then
+		love.graphics.points((camera.position.x / math.sqrt(getWormholeCutoffRho(true) ^ 2 - wormhole.throatRadius ^ 2) * 0.5 + 0.5) * objectOverlayTexture:getWidth(), camera.position.y / consts.tau * objectOverlayTexture:getHeight())
+	end
 	love.graphics.setCanvas()
 
 	if overviewMode then
@@ -670,9 +672,9 @@ function love.draw()
 		local rayMapWidth, rayMapHeight = rayMap:getDimensions()
 		rayShader:send("rayMap", rayMap)
 		rayShader:send("stepCount", stepCount)
-		rayShader:send("stepSize", consts.stepSize)
+		rayShader:send("stepSize", consts.stepSize / consts.zoom) -- Generally stepSize is *not* multiplied by zoom when used.
 		rayShader:send("gridSpacing", 32)
-		rayShader:send("gridCells", 60) -- Per axis
+		-- rayShader:send("gridCells", 60) -- Per axis
 		rayShader:send("gridLineThickness", 4)
 		rayShader:send("wormholeThroatRadius", wormhole.throatRadius)
 		rayShader:send("wormholeMouthAPosition", {vec2.components(wormhole.mouthAPosition)})
@@ -732,7 +734,7 @@ function love.draw()
 	end
 	objectShader:send("overlay", objectOverlayTexture)
 	objectShader:send("gridSpacing", 32)
-	objectShader:send("gridCells", 60) -- Per axis
+	-- objectShader:send("gridCells", 60) -- Per axis
 	objectShader:send("gridLineThickness", 4)
 	objectShader:send("wormholeCutoffR", math.sqrt(getWormholeCutoffRho(true) ^ 2 - wormhole.throatRadius ^ 2))
 	love.graphics.draw(surfaceMesh)

@@ -102,11 +102,33 @@ ChristoffelSymbols getChristoffelSymbols(float r, float theta) {
 	);
 }
 
-vec3 sampleBackground(float r, float theta, vec2 realPosition) {
-	vec2 rg = realPosition / (gridSpacing * gridCells);
+vec3 hue2rgb(float hue) {
+	return clamp(
+		vec3(
+			abs(hue * 6.0 - 3.0) - 1.0,
+			2.0 - abs(hue * 6.0 - 2.0),
+			2.0 - abs(hue * 6.0 - 4.0)
+		),
+		0.0, 1.0
+	);
+}
+
+vec3 hsv2rgb(vec3 hsv) {
+	return ((hue2rgb(hsv.x) - 1.0) * hsv.y + 1.0) * hsv.z;
+}
+
+vec3 sampleBackground(float r, float theta, vec2 realPosition, bool curvedMode) {
+	// vec2 rg = realPosition / (gridSpacing * gridCells);
 	vec2 cellPos = mod(realPosition, vec2(gridSpacing));
-	if (min(cellPos.x, cellPos.y) < gridLineThickness) {
-		return vec3(rg, 1.0);
+	float hue = mod(theta / tau, 1.0);
+	float saturation = r > 0.0 ? 0.8 : 0.4;
+	float value = max(0.1, 1.0 - abs(r) / 200.0);
+	vec3 baseColour = hsv2rgb(vec3(hue, saturation, value));
+	if (!curvedMode) {
+		baseColour = vec3(0.0);
 	}
-	return vec3(rg, 0.0);
+	if (min(cellPos.x, cellPos.y) < gridLineThickness) {
+		return baseColour + 0.5;
+	}
+	return baseColour;
 }

@@ -106,7 +106,7 @@ void computemain() {
 		if (0.745 < proportion && proportion < 0.755) {
 			maxLen *= 2;
 		}
-		overlayPixel = overlayPixel || (mod(float(rayMapX) / float(rayMapSize.x), 0.125) < 0.125 * 0.0625 && stepNumber < maxLen);
+		overlayPixel = currentModeCurved && (overlayPixel || (mod(float(rayMapX) / float(rayMapSize.x), 0.125) < 0.125 * 0.0625 && stepNumber < maxLen));
 
 		if (drawToOverlay) {
 			// Write to overlay
@@ -123,13 +123,11 @@ void computemain() {
 			}
 		}
 
-		colourHere = sampleBackground(currentPosition.x, currentPosition.y, currentRealPosition);
+		// Sample and store
+		colourHere = sampleBackground(currentPosition.x, currentPosition.y, currentRealPosition, currentModeCurved);
 		if (drawOverlayToRay && overlayPixel) {
 			colourHere = vec3(1.0);
 		};
-
-		// Sample and store
-		colourHere = sampleBackground(currentPosition.x, currentPosition.y, currentRealPosition);
 		imageStore(
 			rayMap,
 			ivec2(rayMapX, stepNumber),
